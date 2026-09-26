@@ -16,11 +16,14 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
@@ -43,6 +46,7 @@ public class OverlayService extends Service {
     public static final String ACTION_REFRESH = "com.streamoverlay.lite.REFRESH";
     public static final String ACTION_SET_LOCK = "com.streamoverlay.lite.SET_LOCK";
     public static final String ACTION_CONTROLLER_VISIBILITY = "com.streamoverlay.lite.CONTROLLER_VISIBILITY";
+    public static final String ACTION_UNLOCK_ALL = "com.streamoverlay.lite.UNLOCK_ALL";
 
     private static final int NOTIFICATION_ID = 4242;
     private static final String CHANNEL_ID = "overlay_engine";
@@ -75,8 +79,8 @@ public class OverlayService extends Service {
     private final Map<String, EditText> textEditors = new HashMap<>();
     private final Map<String, ImageView> imageViews = new HashMap<>();
     private final Map<String, WebView> webViews = new HashMap<>();
-    // Tiny independent touch target used only while a locked overlay is outside
-    // the controller app. The main overlay stays FLAG_NOT_TOUCHABLE/click-through.
+    // Independent touch surface used ONLY for locked Text outside the controller.
+    // Image/GIF and Overlay Link remain fully NOT_TOUCHABLE with no unlock hotspot.
     private final Map<String, View> externalUnlockHotspots = new HashMap<>();
     private final Map<String, WindowManager.LayoutParams> externalUnlockHotspotParams = new HashMap<>();
 
@@ -104,12 +108,19 @@ public class OverlayService extends Service {
                 this, 0, open,
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
+        Intent unlockAll = new Intent(this, OverlayService.class);
+        unlockAll.setAction(ACTION_UNLOCK_ALL);
+        PendingIntent unlockAllPi = PendingIntent.getService(
+                this, 91, unlockAll,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+
         Notification notification = new Notification.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_launcher)
                 .setContentTitle("Stream Overlay aktif")
-                .setContentText("Tap untuk mengatur overlay")
+                .setContentText("Overlay berjalan di atas aplikasi lain")
                 .setOngoing(true)
                 .setContentIntent(pi)
+                .addAction(R.drawable.ic_launcher, "Unlock semua", unlockAllPi)
                 .build();
 
         if (Build.VERSION.SDK_INT >= 34) {
@@ -149,7 +160,9 @@ public class OverlayService extends Service {
 
         controllerVisible = repo.prefs().getBoolean("controller_visible", false);
 
-        if (ACTION_SET_LOCK.equals(action)) {
+        if (ACTION_UNLOCK_ALL.equals(action)) {
+            unlockAllRuntime();
+        } else if (ACTION_SET_LOCK.equals(action)) {
             String id = intent.getStringExtra("id");
             boolean locked = intent.getBooleanExtra("locked", false);
             setLockedRuntime(id, locked);
@@ -1206,10 +1219,11 @@ public class OverlayService extends Service {
 
         try { wm.updateViewLayout(root, lp); } catch (Exception ignored) {}
 
-        // Outside the controller app Android cannot long-press a NOT_TOUCHABLE
-        // window. Keep the large overlay click-through and create one tiny, fully
-        // transparent long-press target where the lock button used to live.
-        if (locked && !controllerVisible) {
+        // Outside the controller app, only Text gets a gesture surface:
+        // two fingers held for 1.5 s on the text rectangle unlock that layer.
+        // Image/GIF and Overlay Link stay fully click-through and are unlocked
+        // globally from the foreground notification.
+        if (locked && !controllerVisible && OverlayItem.TYPE_TEXT.equals(item.type)) {
             showExternalUnlockHotspot(id);
         } else {
             removeExternalUnlockHotspot(id);
@@ -1219,32 +1233,93 @@ public class OverlayService extends Service {
     private void showExternalUnlockHotspot(String id) {
         WindowManager.LayoutParams overlayLp = params.get(id);
         OverlayItem item = itemCache.get(id);
-        if (overlayLp == null || item == null || !item.locked || controllerVisible) {
+        if (overlayLp == null || item == null || !item.locked || controllerVisible
+                || !OverlayItem.TYPE_TEXT.equals(item.type)) {
             removeExternalUnlockHotspot(id);
             return;
         }
 
-        final int size = Ui.dp(this, 48);
         WindowManager.LayoutParams hp = externalUnlockHotspotParams.get(id);
         View hotspot = externalUnlockHotspots.get(id);
 
         if (hotspot == null) {
-            hotspot = new View(this);
-            hotspot.setBackgroundColor(Color.TRANSPARENT);
-            hotspot.setClickable(true);
-            hotspot.setLongClickable(true);
+            // Nearly invisible, but not a zero-alpha window: some OEMs are unreliable
+            // with fully transparent application-overlay touch surfaces. There is no
+            // icon or hint outside the app.
+            View touchSurface = new View(this);
+            touchSurface.setBackgroundColor(0x01000000);
+            touchSurface.setClickable(true);
+
             final String overlayId = id;
-            hotspot.setOnLongClickListener(v -> {
+            final Handler holdHandler = new Handler(Looper.getMainLooper());
+            final float moveTolerance = Ui.dp(this, 24);
+            final float[] start = new float[4];
+            final int[] pointerCount = new int[]{0};
+            final boolean[] armed = new boolean[]{false};
+            final boolean[] fired = new boolean[]{false};
+
+            final Runnable unlockRunnable = () -> {
+                if (!armed[0] || fired[0] || pointerCount[0] < 2) return;
+                fired[0] = true;
+                touchSurface.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
                 setLockedRuntime(overlayId, false);
-                return true;
+            };
+
+            touchSurface.setOnTouchListener((v, event) -> {
+                pointerCount[0] = event.getPointerCount();
+                switch (event.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        armed[0] = false;
+                        fired[0] = false;
+                        holdHandler.removeCallbacks(unlockRunnable);
+                        return true;
+
+                    case MotionEvent.ACTION_POINTER_DOWN:
+                        if (event.getPointerCount() >= 2) {
+                            armed[0] = true;
+                            fired[0] = false;
+                            start[0] = event.getX(0);
+                            start[1] = event.getY(0);
+                            start[2] = event.getX(1);
+                            start[3] = event.getY(1);
+                            holdHandler.removeCallbacks(unlockRunnable);
+                            holdHandler.postDelayed(unlockRunnable, 1500);
+                        }
+                        return true;
+
+                    case MotionEvent.ACTION_MOVE:
+                        if (armed[0]) {
+                            if (event.getPointerCount() < 2
+                                    || Math.abs(event.getX(0) - start[0]) > moveTolerance
+                                    || Math.abs(event.getY(0) - start[1]) > moveTolerance
+                                    || Math.abs(event.getX(1) - start[2]) > moveTolerance
+                                    || Math.abs(event.getY(1) - start[3]) > moveTolerance) {
+                                armed[0] = false;
+                                holdHandler.removeCallbacks(unlockRunnable);
+                            }
+                        }
+                        return true;
+
+                    case MotionEvent.ACTION_POINTER_UP:
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        armed[0] = false;
+                        holdHandler.removeCallbacks(unlockRunnable);
+                        return true;
+
+                    default:
+                        return true;
+                }
             });
 
+            hotspot = touchSurface;
             int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                     | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                     | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                     | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
             hp = new WindowManager.LayoutParams(
-                    size, size,
+                    contentWidthPx(overlayLp),
+                    contentHeightPx(overlayLp, item),
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                     flags,
                     PixelFormat.TRANSLUCENT);
@@ -1254,11 +1329,15 @@ public class OverlayService extends Service {
             externalUnlockHotspots.put(id, hotspot);
             externalUnlockHotspotParams.put(id, hp);
             positionExternalUnlockHotspot(id);
-            try { wm.addView(hotspot, hp); } catch (Exception e) {
+            try {
+                wm.addView(hotspot, hp);
+            } catch (Exception e) {
                 externalUnlockHotspots.remove(id);
                 externalUnlockHotspotParams.remove(id);
             }
         } else {
+            hp.width = contentWidthPx(overlayLp);
+            hp.height = contentHeightPx(overlayLp, item);
             positionExternalUnlockHotspot(id);
             try { wm.updateViewLayout(hotspot, hp); } catch (Exception ignored) {}
         }
@@ -1267,12 +1346,36 @@ public class OverlayService extends Service {
     private void positionExternalUnlockHotspot(String id) {
         WindowManager.LayoutParams overlayLp = params.get(id);
         WindowManager.LayoutParams hp = externalUnlockHotspotParams.get(id);
-        if (overlayLp == null || hp == null) return;
-        int size = Ui.dp(this, 48);
-        // Same general spot as the visible lock chip in UNLOCK mode: the
-        // top-right editor area, outside the actual content box.
-        hp.x = overlayLp.x + overlayLp.width - size;
-        hp.y = overlayLp.y;
+        OverlayItem item = itemCache.get(id);
+        if (overlayLp == null || hp == null || item == null) return;
+        // Cover exactly the Text CONTENT rectangle, not editor chrome.
+        hp.x = overlayLp.x + editorSidePx();
+        hp.y = overlayLp.y + editorTopPx();
+        hp.width = contentWidthPx(overlayLp);
+        hp.height = contentHeightPx(overlayLp, item);
+    }
+
+    private void unlockAllRuntime() {
+        List<OverlayItem> all = repo.getAll();
+        for (OverlayItem item : all) {
+            if (item.locked) {
+                item.locked = false;
+                repo.upsert(item);
+            }
+        }
+
+        if (roots.isEmpty()) {
+            renderAll();
+            return;
+        }
+
+        for (String id : new ArrayList<>(itemCache.keySet())) {
+            OverlayItem item = itemCache.get(id);
+            if (item == null) continue;
+            item.locked = false;
+            itemCache.put(id, item);
+            applyEditorState(id, false);
+        }
     }
 
     private void removeExternalUnlockHotspot(String id) {

@@ -1,28 +1,25 @@
-# StreamOverlayLite v2.1.2
+# StreamOverlayLite v2.1.4
 
-Android overlay controller for one-phone livestream setups.
+Android overlay controller ringan untuk livestream hanya dari satu HP.
 
-## What changed in 2.1.2
-- **Free/unbounded MOVE:** overlay position is no longer clamped to the phone screen. You can park part of a layer beyond any edge and the coordinates are persisted exactly.
-- Main overlay windows use `FLAG_LAYOUT_NO_LIMITS` so Android is less likely to pull editor windows back inside the display.
-- **Long-press unlock now works outside StreamOverlayLite too.**
-  - The locked content itself remains `FLAG_NOT_TOUCHABLE`, so gameplay/live controls under the overlay still receive touches.
-  - A tiny transparent 48dp long-press hotspot is created at the old lock-button position (top-right editor area).
-  - Hold that invisible hotspot to unlock the layer.
-  - No “hold to unlock” hint is shown outside the controller app.
-- Inside StreamOverlayLite, the existing visible locked-editor hint/long-press behavior remains available.
-- Overlay Link, full side/corner resize, text alignment, Image/GIF aspect-ratio resize, and direct text editing remain unchanged from 2.1.1.
+## Perubahan v2.1.4
+- Tidak ada ikon gembok atau hint unlock yang mengambang di luar aplikasi.
+- **Text overlay:** ketika locked di luar StreamOverlayLite, tahan **2 jari selama 1,5 detik pada area teks** untuk unlock.
+  - 1 jari tidak memicu aksi apa pun.
+  - Area Text tetap menjadi touch target agar gesture 2 jari dapat dideteksi; karena itu kontrol game tepat di bawah area Text tidak menerima sentuhan selama Text locked.
+- **Image/GIF + Overlay Link:** ketika locked di luar aplikasi, window utama tetap `FLAG_NOT_TOUCHABLE` dan tidak memiliki hotspot unlock. Touch gameplay tetap lewat.
+- Foreground notification sekarang memiliki action **Unlock semua** untuk membuka semua overlay secara global tanpa masuk ke aplikasi.
+- Free MOVE, full side/corner resize, direct text editing, text alignment, Image/GIF aspect ratio, dan Overlay Link tetap dipertahankan.
 
-## Basic flow
-1. Grant Draw over other apps permission.
-2. Turn Overlay Engine ON.
-3. Add Text, Image/GIF, or Overlay Link.
-4. Use `✥ MOVE` to position it — including partly outside the display if desired.
-5. Drag any side or corner handle to resize.
-6. Lock it.
-7. Outside StreamOverlayLite, long-press the invisible area where the lock button was (top-right of that overlay) to unlock without opening the app.
+## Flow singkat
+1. Tambah dan atur overlay.
+2. Lock.
+3. Saat live/game:
+   - Text: 2 jari + tahan 1,5 detik pada teks untuk unlock layer itu.
+   - Image/GIF / Overlay Link: tarik notification shade dan tekan **Unlock semua**.
+4. Tidak ada ikon/hint overlay unlock di layar saat live.
 
 ## Build
-Push the repository to GitHub and run **Build Android APK** from GitHub Actions.
+Push repository ke GitHub lalu jalankan **Build Android APK** dari GitHub Actions.
 
 Toolchain: minSdk 28, compileSdk/targetSdk 36, JDK 17, AGP 9.4.0, Gradle 9.6.0.

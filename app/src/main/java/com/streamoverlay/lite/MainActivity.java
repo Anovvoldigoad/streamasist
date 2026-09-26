@@ -140,7 +140,7 @@ public class MainActivity extends Activity {
         root.addView(addDonation, Ui.matchWrap(6, this));
 
         TextView hint = Ui.text(this,
-                "UNLOCK: pakai ✥ MOVE untuk pindah tanpa batas layar, tarik sisi/pojok untuk resize. LOCK: posisi tetap. Di luar app, tahan area tombol lock sebelumnya (kanan atas overlay) untuk unlock; hotspot-nya transparan.",
+                "UNLOCK: pakai ✥ MOVE untuk pindah dan tarik sisi/pojok untuk resize. Saat LOCK di luar app: Text bisa dibuka dengan tahan 2 jari 1,5 detik pada area teks. Image/GIF dan Overlay Link dibuka lewat tombol Unlock semua di notifikasi.",
                 13, 0xFF9FA5B0);
         hint.setPadding(0, Ui.dp(this, 14), 0, Ui.dp(this, 10));
         root.addView(hint);
