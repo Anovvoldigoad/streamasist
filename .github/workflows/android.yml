@@ -31,6 +31,15 @@ jobs:
         with:
           gradle-version: '9.6.0'
 
+      - name: Guard against stale v1 sources
+        shell: bash
+        run: |
+          # v2 removed these classes. If an upgrade was uploaded over an old repo,
+          # old Java files can survive and break compilation. v2.0.1 ships neutral
+          # tombstones, and this check verifies no legacy symbols remain.
+          ! grep -R --line-number -E 'durationMs|ACTION_DONATION' \
+            app/src/main/java/com/streamoverlay/lite/*.java
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 

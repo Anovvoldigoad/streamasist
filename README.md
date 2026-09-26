@@ -95,3 +95,15 @@ Langkah:
 ## Compatibility note
 
 Beberapa aplikasi Android dapat menyembunyikan third-party overlays. Selain itu, Android 14 single-app screen sharing dapat mengecualikan overlay aplikasi lain. Untuk livestream, gunakan full-display/screen capture bila aplikasi streaming menyediakan pilihan tersebut dan selalu tes output dari sisi viewer.
+
+## Upgrade note — v2.0.1
+
+If this project is uploaded over a repository that previously contained v1,
+GitHub does not automatically delete source files that are absent from the new
+upload. v2.0.1 therefore includes neutral tombstone files for the old
+`OverlayEditorActivity.java` and `DonationNotificationListener.java`, preventing
+stale v1 code from being compiled.
+
+If you maintain the repository with Git locally, you may delete those two
+`tombstone files` after confirming the old classes are gone from Git history's
+current tree; they are not used by the app at runtime.
