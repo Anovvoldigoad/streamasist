@@ -1,118 +1,25 @@
-# Stream Overlay Lite v2
+# StreamOverlayLite v2.1.1
 
-Android overlay companion ringan untuk streamer yang ingin live **cukup dari satu HP** tanpa panel setting yang ribet.
+Android overlay controller for one-phone livestream setups.
 
-## Flow v2
+## What changed in 2.1.1
+- **Donation Alert / Donation URL renamed to Overlay Link.** Paste one HTTPS overlay/widget link from Saweria, Trakteer, Streamlabs, or another provider.
+- **Full resize frame:** drag the left, right, top, bottom, or any of the four corners.
+- **Dedicated `✥ MOVE` handle:** moving an overlay is separate from resizing it.
+- **Image/GIF corner resize keeps the original aspect ratio.** Side handles can freely adjust the frame without stretching the bitmap itself (`FIT_CENTER`).
+- Text remains editable directly on the overlay, with horizontal + vertical alignment controls.
+- Long-press a locked overlay while the StreamOverlayLite controller is open to unlock it.
+- Locked overlays remain click-through when you leave the controller and return to your game/live app.
 
-1. Beri izin **Display over other apps**.
-2. Nyalakan **Overlay Engine**.
-3. Tambahkan salah satu:
-   - **Text**
-   - **Image / GIF**
-   - **Donation URL**
-4. Saat **UNLOCK**, atur langsung di layar:
-   - `↕` = drag/pindah
-   - `↘` = resize
-   - Text: tap tulisan untuk mengetik langsung
-   - Text: `A−`, `A+`, `●`, `BG` untuk ukuran dan warna sederhana
-   - `🔒` = lock langsung
-5. Saat **LOCK**, editor hilang, posisi tetap di koordinat terakhir, dan overlay menjadi tidak bisa disentuh.
+## Basic flow
+1. Grant Draw over other apps permission.
+2. Turn Overlay Engine ON.
+3. Add Text, Image/GIF, or **Overlay Link**.
+4. Use `✥ MOVE` to position it.
+5. Drag any side or corner handle to resize.
+6. Lock it when the position is final.
 
-## Donation alert v2
+## Build
+Push the repository to GitHub and run **Build Android APK** from GitHub Actions.
 
-Donation tidak lagi memakai Notification Bridge atau JSON feed.
-
-Cukup tekan **+ Donation URL** lalu paste **widget/source URL HTTPS** dari provider seperti Saweria, Trakteer, Streamlabs, dan provider lain yang menyediakan browser/widget source.
-
-Aplikasi merender source tersebut melalui WebView transparan:
-- background WebView transparan,
-- HTML/body dipaksa transparan setelah source selesai dimuat,
-- JavaScript + DOM storage aktif karena widget alert umumnya membutuhkannya,
-- media autoplay diizinkan untuk alert sound,
-- HTTP biasa ditolak; gunakan HTTPS.
-
-Saat source widget sedang idle, area overlay akan transparan selama widget/provider tersebut memang menggunakan desain alert transparan. Pengaturan style alert tetap dilakukan di dashboard provider.
-
-## Lock v2: posisi tidak boleh bergeser
-
-Lock v2 tidak melakukan `removeView()` lalu membuat overlay baru.
-
-Urutannya:
-1. simpan `x`, `y`, width, height dari `WindowManager.LayoutParams` yang sedang tampil,
-2. ubah flag window yang sama,
-3. panggil `updateViewLayout()` tanpa menghitung ulang posisi.
-
-Jadi lock/unlock tidak melakukan center, snap, grid, atau reset koordinat.
-
-### Catatan Android 12+
-
-Android 12 membatasi touch-through untuk third-party application overlay. Agar locked overlay tetap dapat meneruskan sentuhan ke aplikasi di bawahnya, v2 memakai `LayoutParams.alpha = 0.80` pada Android 12+ ketika LOCK.
-
-## Text overlay
-
-Tidak ada lagi editor form dengan:
-- kode warna HEX,
-- angka width/height,
-- angka font size,
-- koordinat x/y.
-
-Text diedit langsung pada overlay. Ukuran dan warna memakai kontrol visual sederhana.
-
-## Image / GIF
-
-- Pilih langsung dari Android document picker.
-- GIF memakai `ImageDecoder` / `AnimatedImageDrawable` native Android 9+.
-- Drag dan resize langsung ketika unlocked.
-- Tidak memakai Glide/Coil.
-
-## Arsitektur
-
-- Java + Android Views.
-- `TYPE_APPLICATION_OVERLAY`.
-- Satu `OverlayService` foreground.
-- SharedPreferences untuk state kecil.
-- Satu WindowManager window kecil per overlay.
-- WebView hanya dibuat untuk layer Donation URL.
-- Tidak memakai Compose, Room, Retrofit, OkHttp, Glide, atau Coil.
-
-## Build di GitHub
-
-Project sudah dilengkapi workflow GitHub Actions.
-
-Toolchain:
-- JDK 17
-- Android API 36
-- Build Tools 36.0.0
-- Android Gradle Plugin 9.4.0
-- Gradle 9.6.0
-
-Langkah:
-1. Upload isi project ke root repository.
-2. Buka **Actions**.
-3. Jalankan **Build Android APK**.
-4. Download artifact `StreamOverlayLite-debug-apk`.
-
-## Compatibility note
-
-Beberapa aplikasi Android dapat menyembunyikan third-party overlays. Selain itu, Android 14 single-app screen sharing dapat mengecualikan overlay aplikasi lain. Untuk livestream, gunakan full-display/screen capture bila aplikasi streaming menyediakan pilihan tersebut dan selalu tes output dari sisi viewer.
-
-## Upgrade note — v2.0.2
-
-If this project is uploaded over a repository that previously contained v1,
-GitHub does not automatically delete source files that are absent from the new
-upload. v2.0.2 therefore includes neutral tombstone files for the old
-`OverlayEditorActivity.java` and `DonationNotificationListener.java`, preventing
-stale v1 code from being compiled.
-
-If you maintain the repository with Git locally, you may delete those two
-`tombstone files` after confirming the old classes are gone from Git history's
-current tree; they are not used by the app at runtime.
-
-
-## v2.0.2 runtime UI fix
-
-- The controller dashboard hides this app's own system-overlay windows while the dashboard is visible, preventing a saved/full-screen overlay from covering the app itself.
-- Overlay windows are restored automatically when the user leaves the controller to start streaming.
-- Overlay permission settings and the image picker keep overlays hidden while those external setup screens are open.
-- Notification permission is no longer requested immediately on first launch; it is requested when the overlay engine is enabled.
-- Donation WebView begins invisible and is revealed only after transparency is applied, with a fallback reveal, reducing black/white loading flashes.
+Toolchain: minSdk 28, compileSdk/targetSdk 36, JDK 17, AGP 9.4.0, Gradle 9.6.0.

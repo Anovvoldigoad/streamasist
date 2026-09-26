@@ -56,10 +56,19 @@ public class OverlayService extends Service {
             Color.TRANSPARENT, 0x88000000, 0x88FFFFFF
     };
 
+    private static final int EDITOR_SIDE_DP = 48;
+    private static final int EDITOR_TOP_DP = 48;
+    private static final int EDITOR_BOTTOM_DP = 50;
+    private static final int TEXT_EDITOR_BOTTOM_DP = 92;
+
     private WindowManager wm;
     private OverlayRepository repo;
+    private boolean controllerVisible;
 
     private final Map<String, FrameLayout> roots = new HashMap<>();
+    private final Map<String, FrameLayout> contentHosts = new HashMap<>();
+    private final Map<String, View> unlockSurfaces = new HashMap<>();
+    private final Map<String, TextView> lockedHints = new HashMap<>();
     private final Map<String, WindowManager.LayoutParams> params = new HashMap<>();
     private final Map<String, OverlayItem> itemCache = new HashMap<>();
     private final Map<String, List<View>> editorChrome = new HashMap<>();
@@ -71,6 +80,7 @@ public class OverlayService extends Service {
         super.onCreate();
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
         repo = new OverlayRepository(this);
+        controllerVisible = repo.prefs().getBoolean("controller_visible", false);
         startAsForeground();
     }
 
@@ -112,12 +122,18 @@ public class OverlayService extends Service {
         String action = intent == null ? null : intent.getAction();
 
         if (ACTION_CONTROLLER_VISIBILITY.equals(action)) {
-            boolean visible = intent.getBooleanExtra("visible", false);
-            repo.prefs().edit().putBoolean("controller_visible", visible).apply();
-            if (visible) {
+            controllerVisible = intent.getBooleanExtra("visible", false);
+            repo.prefs().edit().putBoolean("controller_visible", controllerVisible).apply();
+
+            if (!repo.prefs().getBoolean("engine_enabled", false)
+                    || !Settings.canDrawOverlays(this)) {
                 removeAll();
                 return START_STICKY;
             }
+
+            if (roots.isEmpty()) renderAll();
+            else applyControllerModeToAll();
+            return START_STICKY;
         }
 
         if (!repo.prefs().getBoolean("engine_enabled", false)
@@ -127,11 +143,7 @@ public class OverlayService extends Service {
             return START_NOT_STICKY;
         }
 
-        // The controller must always stay usable. Never draw system overlays over it.
-        if (repo.prefs().getBoolean("controller_visible", false)) {
-            removeAll();
-            return START_STICKY;
-        }
+        controllerVisible = repo.prefs().getBoolean("controller_visible", false);
 
         if (ACTION_SET_LOCK.equals(action)) {
             String id = intent.getStringExtra("id");
@@ -166,29 +178,72 @@ public class OverlayService extends Service {
         root.setClipToPadding(false);
         root.setBackgroundColor(Color.TRANSPARENT);
 
+        FrameLayout contentHost = new FrameLayout(this);
+        contentHost.setClipChildren(false);
+        contentHost.setClipToPadding(false);
+        contentHost.setBackgroundColor(Color.TRANSPARENT);
+
         View content;
         if (OverlayItem.TYPE_IMAGE.equals(item.type)) {
             content = createImage(item);
         } else if (OverlayItem.TYPE_DONATION.equals(item.type)) {
-            content = createDonationSource(item);
+            content = createOverlayLinkSource(item);
         } else {
             content = createText(item);
         }
-
-        root.addView(content, new FrameLayout.LayoutParams(
+        contentHost.addView(content, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT));
 
+        View unlockSurface = new View(this);
+        unlockSurface.setBackgroundColor(Color.TRANSPARENT);
+        unlockSurface.setClickable(true);
+        unlockSurface.setLongClickable(true);
+        unlockSurface.setVisibility(View.GONE);
+        unlockSurface.setOnLongClickListener(v -> {
+            setLockedRuntime(item.id, false);
+            return true;
+        });
+        contentHost.addView(unlockSurface, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+
+        FrameLayout.LayoutParams contentLp = new FrameLayout.LayoutParams(
+                Ui.dp(this, item.widthDp),
+                Ui.dp(this, item.heightDp));
+        contentLp.leftMargin = editorSidePx();
+        contentLp.topMargin = editorTopPx();
+        root.addView(contentHost, contentLp);
+
         List<View> chrome = new ArrayList<>();
         addEditorChrome(root, item, chrome);
+
+        TextView lockedHint = new TextView(this);
+        lockedHint.setText("Tahan untuk unlock");
+        lockedHint.setTextSize(11);
+        lockedHint.setTextColor(Color.WHITE);
+        lockedHint.setGravity(Gravity.CENTER);
+        lockedHint.setBackground(rounded(0xCC17191F, 9));
+        lockedHint.setPadding(Ui.dp(this, 10), 0, Ui.dp(this, 10), 0);
+        FrameLayout.LayoutParams hintLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Ui.dp(this, 30), Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        hintLp.topMargin = Ui.dp(this, 6);
+        root.addView(lockedHint, hintLp);
+        lockedHint.setVisibility(View.GONE);
 
         WindowManager.LayoutParams lp = createParams(item);
         try {
             wm.addView(root, lp);
             roots.put(item.id, root);
+            contentHosts.put(item.id, contentHost);
+            unlockSurfaces.put(item.id, unlockSurface);
+            lockedHints.put(item.id, lockedHint);
             params.put(item.id, lp);
             itemCache.put(item.id, item);
             editorChrome.put(item.id, chrome);
+            syncContentHostToWindow(item.id);
+            persistGeometry(item.id);
             applyEditorState(item.id, item.locked);
         } catch (Exception e) {
             destroyContent(item.id, content);
@@ -199,7 +254,7 @@ public class OverlayService extends Service {
         EditText edit = new EditText(this);
         edit.setText(item.text == null ? "" : item.text);
         edit.setTextSize(item.textSizeSp);
-        edit.setGravity(Gravity.CENTER);
+        applyTextGravity(edit, item);
         edit.setPadding(Ui.dp(this, 8), Ui.dp(this, 4), Ui.dp(this, 8), Ui.dp(this, 4));
         edit.setSingleLine(false);
         edit.setTextColor(parseColor(item.textColor, Color.WHITE));
@@ -234,9 +289,14 @@ public class OverlayService extends Service {
             Uri uri = Uri.parse(item.imageUri);
             ImageDecoder.Source source = ImageDecoder.createSource(getContentResolver(), uri);
             Drawable drawable = ImageDecoder.decodeDrawable(source, (decoder, info, src) -> {
-                int targetW = Math.max(Ui.dp(this, 48), Ui.dp(this, item.widthDp));
-                int targetH = Math.max(Ui.dp(this, 48), Ui.dp(this, item.heightDp));
-                decoder.setTargetSize(targetW, targetH);
+                int sourceW = Math.max(1, info.getSize().getWidth());
+                int sourceH = Math.max(1, info.getSize().getHeight());
+                item.imageAspectRatio = sourceW / (float) sourceH;
+                repo.upsert(item);
+                int sample = 1;
+                // Keep enough detail for stream overlays without decoding huge camera images at full RAM cost.
+                while (sourceW / sample > 2048 || sourceH / sample > 2048) sample *= 2;
+                decoder.setTargetSampleSize(sample);
             });
             image.setImageDrawable(drawable);
             if (drawable instanceof AnimatedImageDrawable) {
@@ -249,7 +309,7 @@ public class OverlayService extends Service {
         return image;
     }
 
-    private View createDonationSource(OverlayItem item) {
+    private View createOverlayLinkSource(OverlayItem item) {
         WebView web = new WebView(this);
         web.setBackgroundColor(Color.TRANSPARENT);
         // Avoid a black/white WebView flash while a widget source is loading.
@@ -336,19 +396,26 @@ public class OverlayService extends Service {
         int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                 | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                 | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
-        if (item.locked) flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        if (item.locked && !controllerVisible) flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        int maxContentW = Math.max(Ui.dp(this, 80), dm.widthPixels - editorSidePx() * 2);
+        int maxContentH = Math.max(Ui.dp(this, 80), dm.heightPixels - editorTopPx() - editorBottomPx(item));
+        int contentW = Math.min(Ui.dp(this, item.widthDp), maxContentW);
+        int contentH = Math.min(Ui.dp(this, item.heightDp), maxContentH);
 
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
-                Ui.dp(this, item.widthDp),
-                Ui.dp(this, item.heightDp),
+                contentW + editorSidePx() * 2,
+                contentH + editorTopPx() + editorBottomPx(item),
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 flags,
                 PixelFormat.TRANSLUCENT);
         lp.gravity = Gravity.TOP | Gravity.START;
-        lp.x = item.x;
-        lp.y = item.y;
+        lp.x = item.x - editorSidePx();
+        lp.y = item.y - editorTopPx();
         lp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
-        lp.alpha = lockedAlpha(item.locked);
+        lp.alpha = (item.locked && !controllerVisible) ? lockedAlpha(true) : 1.0f;
+        clampPosition(lp, item);
         return lp;
     }
 
@@ -360,71 +427,180 @@ public class OverlayService extends Service {
     }
 
     private void addEditorChrome(FrameLayout root, OverlayItem item, List<View> chrome) {
-        TextView drag = chip("↕");
+        // MOVE is intentionally separate from resize handles so dragging never
+        // accidentally changes the overlay size.
+        TextView drag = chip("✥ MOVE");
+        drag.setTextSize(12);
         FrameLayout.LayoutParams dragLp = new FrameLayout.LayoutParams(
-                Ui.dp(this, 42), Ui.dp(this, 42), Gravity.TOP | Gravity.START);
+                Ui.dp(this, 72), Ui.dp(this, 24), Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        dragLp.topMargin = 0;
         root.addView(drag, dragLp);
         chrome.add(drag);
         installDrag(drag, root, item.id);
 
         TextView lock = chip("🔒");
         FrameLayout.LayoutParams lockLp = new FrameLayout.LayoutParams(
-                Ui.dp(this, 48), Ui.dp(this, 42), Gravity.TOP | Gravity.END);
+                Ui.dp(this, 40), Ui.dp(this, 24), Gravity.TOP | Gravity.END);
+        lockLp.rightMargin = Ui.dp(this, 2);
+        lockLp.topMargin = 0;
         root.addView(lock, lockLp);
         chrome.add(lock);
         lock.setOnClickListener(v -> setLockedRuntime(item.id, true));
 
-        TextView resize = chip("↘");
-        FrameLayout.LayoutParams resizeLp = new FrameLayout.LayoutParams(
-                Ui.dp(this, 42), Ui.dp(this, 42), Gravity.BOTTOM | Gravity.END);
-        root.addView(resize, resizeLp);
-        chrome.add(resize);
-        installResize(resize, root, item.id);
+        // Full frame resizing: all four sides + all four corners.
+        // Image/GIF corners preserve the media aspect ratio. Side handles adjust
+        // the frame freely, which is useful when a source has transparent space.
+        addResizeHandle(root, item, chrome, "↖", Gravity.TOP | Gravity.START,
+                Ui.dp(this, 26), Ui.dp(this, 26), false, false,
+                true, true, false, false, OverlayItem.TYPE_IMAGE.equals(item.type));
+        addResizeHandle(root, item, chrome, "↗", Gravity.TOP | Gravity.END,
+                Ui.dp(this, 26), Ui.dp(this, 26), true, false,
+                false, true, true, false, OverlayItem.TYPE_IMAGE.equals(item.type));
+        addResizeHandle(root, item, chrome, "↙", Gravity.BOTTOM | Gravity.START,
+                Ui.dp(this, 26), editorBottomPx(item) - Ui.dp(this, 22), false, true,
+                true, false, false, true, OverlayItem.TYPE_IMAGE.equals(item.type));
+        addResizeHandle(root, item, chrome, "↘", Gravity.BOTTOM | Gravity.END,
+                Ui.dp(this, 26), editorBottomPx(item) - Ui.dp(this, 22), true, true,
+                false, false, true, true, OverlayItem.TYPE_IMAGE.equals(item.type));
+
+        // Edge handles. Margins keep them outside the content box.
+        TextView topResize = resizeChip("↕");
+        FrameLayout.LayoutParams topLp = new FrameLayout.LayoutParams(
+                Ui.dp(this, 28), Ui.dp(this, 22), Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        topLp.topMargin = editorTopPx() - Ui.dp(this, 22);
+        root.addView(topResize, topLp);
+        chrome.add(topResize);
+        installFrameResize(topResize, root, item.id, false, true, false, false, false);
+
+        TextView bottomResize = resizeChip("↕");
+        FrameLayout.LayoutParams bottomLp = new FrameLayout.LayoutParams(
+                Ui.dp(this, 28), Ui.dp(this, 22), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        bottomLp.bottomMargin = Math.max(0, editorBottomPx(item) - Ui.dp(this, 22));
+        root.addView(bottomResize, bottomLp);
+        chrome.add(bottomResize);
+        installFrameResize(bottomResize, root, item.id, false, false, false, true, false);
+
+        TextView leftResize = resizeChip("↔");
+        FrameLayout.LayoutParams leftLp = new FrameLayout.LayoutParams(
+                Ui.dp(this, 22), Ui.dp(this, 34), Gravity.START | Gravity.CENTER_VERTICAL);
+        leftLp.leftMargin = editorSidePx() - Ui.dp(this, 22);
+        root.addView(leftResize, leftLp);
+        chrome.add(leftResize);
+        installFrameResize(leftResize, root, item.id, true, false, false, false, false);
+
+        TextView rightResize = resizeChip("↔");
+        FrameLayout.LayoutParams rightLp = new FrameLayout.LayoutParams(
+                Ui.dp(this, 22), Ui.dp(this, 34), Gravity.END | Gravity.CENTER_VERTICAL);
+        rightLp.rightMargin = editorSidePx() - Ui.dp(this, 22);
+        root.addView(rightResize, rightLp);
+        chrome.add(rightResize);
+        installFrameResize(rightResize, root, item.id, false, false, true, false, false);
 
         if (OverlayItem.TYPE_TEXT.equals(item.type)) {
-            LinearLayout tools = new LinearLayout(this);
-            tools.setOrientation(LinearLayout.HORIZONTAL);
-            tools.setGravity(Gravity.CENTER_VERTICAL);
-            tools.setPadding(Ui.dp(this, 3), Ui.dp(this, 2), Ui.dp(this, 3), Ui.dp(this, 2));
-            tools.setBackground(rounded(0xBB17191F, 8));
+            LinearLayout styleTools = new LinearLayout(this);
+            styleTools.setOrientation(LinearLayout.HORIZONTAL);
+            styleTools.setGravity(Gravity.CENTER_VERTICAL);
+            styleTools.setPadding(Ui.dp(this, 3), Ui.dp(this, 1), Ui.dp(this, 3), Ui.dp(this, 1));
+            styleTools.setBackground(rounded(0xCC17191F, 8));
 
             TextView smaller = miniChip("A−");
             TextView bigger = miniChip("A+");
             TextView color = miniChip("●");
             TextView bg = miniChip("BG");
             TextView done = miniChip("✓");
-            tools.addView(smaller);
-            tools.addView(bigger);
-            tools.addView(color);
-            tools.addView(bg);
-            tools.addView(done);
+            styleTools.addView(smaller);
+            styleTools.addView(bigger);
+            styleTools.addView(color);
+            styleTools.addView(bg);
+            styleTools.addView(done);
 
-            FrameLayout.LayoutParams toolsLp = new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams styleLp = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Ui.dp(this, 38),
-                    Gravity.BOTTOM | Gravity.START);
-            root.addView(tools, toolsLp);
-            chrome.add(tools);
+                    Ui.dp(this, 36), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+            // First 24dp below the content is reserved for resize handles.
+            styleLp.bottomMargin = Ui.dp(this, 28);
+            root.addView(styleTools, styleLp);
+            chrome.add(styleTools);
+
+            LinearLayout alignTools = new LinearLayout(this);
+            alignTools.setOrientation(LinearLayout.HORIZONTAL);
+            alignTools.setGravity(Gravity.CENTER_VERTICAL);
+            alignTools.setPadding(Ui.dp(this, 3), Ui.dp(this, 1), Ui.dp(this, 3), Ui.dp(this, 1));
+            alignTools.setBackground(rounded(0xCC17191F, 8));
+
+            TextView left = miniChip("⇤");
+            TextView center = miniChip("↔");
+            TextView right = miniChip("⇥");
+            TextView top = miniChip("↑");
+            TextView middle = miniChip("↕");
+            TextView bottom = miniChip("↓");
+            alignTools.addView(left);
+            alignTools.addView(center);
+            alignTools.addView(right);
+            alignTools.addView(top);
+            alignTools.addView(middle);
+            alignTools.addView(bottom);
+
+            FrameLayout.LayoutParams alignLp = new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Ui.dp(this, 36), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+            alignLp.bottomMargin = 0;
+            root.addView(alignTools, alignLp);
+            chrome.add(alignTools);
 
             smaller.setOnClickListener(v -> changeTextSize(item.id, -2f));
             bigger.setOnClickListener(v -> changeTextSize(item.id, 2f));
             color.setOnClickListener(v -> cycleTextColor(item.id));
             bg.setOnClickListener(v -> cycleBackground(item.id));
             done.setOnClickListener(v -> finishTextEdit(item.id));
+            left.setOnClickListener(v -> setTextHorizontal(item.id, "left"));
+            center.setOnClickListener(v -> setTextHorizontal(item.id, "center"));
+            right.setOnClickListener(v -> setTextHorizontal(item.id, "right"));
+            top.setOnClickListener(v -> setTextVertical(item.id, "top"));
+            middle.setOnClickListener(v -> setTextVertical(item.id, "center"));
+            bottom.setOnClickListener(v -> setTextVertical(item.id, "bottom"));
         } else if (OverlayItem.TYPE_DONATION.equals(item.type)) {
             TextView placeholder = new TextView(this);
-            placeholder.setText("Donation source\nDrag • Resize • Lock");
+            placeholder.setText("Overlay Link");
             placeholder.setTextColor(Color.WHITE);
-            placeholder.setTextSize(13);
+            placeholder.setTextSize(12);
             placeholder.setGravity(Gravity.CENTER);
-            placeholder.setBackground(rounded(0x66000000, 8));
+            placeholder.setBackground(rounded(0x8817191F, 8));
             FrameLayout.LayoutParams p = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Gravity.CENTER);
+                    Ui.dp(this, 24), Gravity.TOP | Gravity.START);
+            p.leftMargin = editorSidePx() + Ui.dp(this, 6);
+            p.topMargin = Ui.dp(this, 2);
             root.addView(placeholder, p);
             chrome.add(placeholder);
         }
+    }
+
+    private void addResizeHandle(FrameLayout root, OverlayItem item, List<View> chrome,
+                                 String label, int gravity, int horizontalMargin, int verticalMargin,
+                                 boolean marginRight, boolean marginBottom,
+                                 boolean left, boolean top, boolean right, boolean bottom,
+                                 boolean preserveImageRatio) {
+        TextView handle = resizeChip(label);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                Ui.dp(this, 22), Ui.dp(this, 22), gravity);
+        if (marginRight) lp.rightMargin = horizontalMargin;
+        else lp.leftMargin = horizontalMargin;
+        if (marginBottom) lp.bottomMargin = Math.max(0, verticalMargin);
+        else lp.topMargin = Math.max(0, verticalMargin);
+        root.addView(handle, lp);
+        chrome.add(handle);
+        installFrameResize(handle, root, item.id, left, top, right, bottom, preserveImageRatio);
+    }
+
+    private TextView resizeChip(String label) {
+        TextView v = new TextView(this);
+        v.setText(label);
+        v.setTextSize(12);
+        v.setTextColor(Color.WHITE);
+        v.setGravity(Gravity.CENTER);
+        v.setBackground(rounded(0xCC17191F, 7));
+        return v;
     }
 
     private TextView chip(String label) {
@@ -435,6 +611,232 @@ public class OverlayService extends Service {
         v.setGravity(Gravity.CENTER);
         v.setBackground(rounded(0xCC17191F, 10));
         return v;
+    }
+
+
+    private int editorSidePx() {
+        return Ui.dp(this, EDITOR_SIDE_DP);
+    }
+
+    private int editorTopPx() {
+        return Ui.dp(this, EDITOR_TOP_DP);
+    }
+
+    private int editorBottomPx(OverlayItem item) {
+        return Ui.dp(this, OverlayItem.TYPE_TEXT.equals(item.type)
+                ? TEXT_EDITOR_BOTTOM_DP : EDITOR_BOTTOM_DP);
+    }
+
+    private int windowWidthPx(OverlayItem item) {
+        return Ui.dp(this, item.widthDp) + editorSidePx() * 2;
+    }
+
+    private int windowHeightPx(OverlayItem item) {
+        return Ui.dp(this, item.heightDp) + editorTopPx() + editorBottomPx(item);
+    }
+
+    private int contentWidthPx(WindowManager.LayoutParams lp) {
+        return Math.max(Ui.dp(this, 1), lp.width - editorSidePx() * 2);
+    }
+
+    private int contentHeightPx(WindowManager.LayoutParams lp, OverlayItem item) {
+        return Math.max(Ui.dp(this, 1), lp.height - editorTopPx() - editorBottomPx(item));
+    }
+
+    private void setContentSize(WindowManager.LayoutParams lp, OverlayItem item, int contentW, int contentH) {
+        lp.width = Math.max(Ui.dp(this, 1), contentW) + editorSidePx() * 2;
+        lp.height = Math.max(Ui.dp(this, 1), contentH) + editorTopPx() + editorBottomPx(item);
+    }
+
+    private void syncContentHostToWindow(String id) {
+        FrameLayout host = contentHosts.get(id);
+        WindowManager.LayoutParams lp = params.get(id);
+        OverlayItem item = itemCache.get(id);
+        if (host == null || lp == null || item == null) return;
+        FrameLayout.LayoutParams hp = (FrameLayout.LayoutParams) host.getLayoutParams();
+        hp.width = contentWidthPx(lp);
+        hp.height = contentHeightPx(lp, item);
+        hp.leftMargin = editorSidePx();
+        hp.topMargin = editorTopPx();
+        host.setLayoutParams(hp);
+    }
+
+    private void installFrameResize(View handle, View root, String id,
+                                    boolean resizeLeft, boolean resizeTop,
+                                    boolean resizeRight, boolean resizeBottom,
+                                    boolean preserveImageRatio) {
+        handle.setOnTouchListener(new View.OnTouchListener() {
+            int startContentLeft;
+            int startContentTop;
+            int startContentW;
+            int startContentH;
+            float downX;
+            float downY;
+
+            @Override public boolean onTouch(View v, MotionEvent event) {
+                WindowManager.LayoutParams lp = params.get(id);
+                OverlayItem item = itemCache.get(id);
+                if (lp == null || item == null || item.locked) return true;
+
+                switch (event.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        finishTextEdit(id);
+                        startContentLeft = lp.x + editorSidePx();
+                        startContentTop = lp.y + editorTopPx();
+                        startContentW = contentWidthPx(lp);
+                        startContentH = contentHeightPx(lp, item);
+                        downX = event.getRawX();
+                        downY = event.getRawY();
+                        return true;
+
+                    case MotionEvent.ACTION_MOVE:
+                        int dx = Math.round(event.getRawX() - downX);
+                        int dy = Math.round(event.getRawY() - downY);
+                        int startRight = startContentLeft + startContentW;
+                        int startBottom = startContentTop + startContentH;
+
+                        int proposedLeft = resizeLeft ? startContentLeft + dx : startContentLeft;
+                        int proposedRight = resizeRight ? startRight + dx : startRight;
+                        int proposedTop = resizeTop ? startContentTop + dy : startContentTop;
+                        int proposedBottom = resizeBottom ? startBottom + dy : startBottom;
+
+                        int minW = Ui.dp(OverlayService.this,
+                                OverlayItem.TYPE_TEXT.equals(item.type) ? 120 : 80);
+                        int minH = Ui.dp(OverlayService.this,
+                                OverlayItem.TYPE_TEXT.equals(item.type) ? 54 : 60);
+                        DisplayMetrics dm = getResources().getDisplayMetrics();
+                        int maxW = Math.max(minW, dm.widthPixels);
+                        int maxH = Math.max(minH, dm.heightPixels);
+
+                        int requestedW = Math.max(1, proposedRight - proposedLeft);
+                        int requestedH = Math.max(1, proposedBottom - proposedTop);
+                        int newW = clamp(requestedW, minW, maxW);
+                        int newH = clamp(requestedH, minH, maxH);
+
+                        boolean isCorner = (resizeLeft || resizeRight) && (resizeTop || resizeBottom);
+                        if (preserveImageRatio && isCorner
+                                && OverlayItem.TYPE_IMAGE.equals(item.type)
+                                && item.imageAspectRatio > 0.05f) {
+                            float ratio = item.imageAspectRatio;
+                            float relativeW = Math.abs(newW - startContentW) / (float) Math.max(1, startContentW);
+                            float relativeH = Math.abs(newH - startContentH) / (float) Math.max(1, startContentH);
+                            if (relativeW >= relativeH) {
+                                newH = Math.round(newW / ratio);
+                            } else {
+                                newW = Math.round(newH * ratio);
+                            }
+                            if (newW > maxW) {
+                                newW = maxW;
+                                newH = Math.round(newW / ratio);
+                            }
+                            if (newH > maxH) {
+                                newH = maxH;
+                                newW = Math.round(newH * ratio);
+                            }
+                            if (newW < minW) {
+                                newW = minW;
+                                newH = Math.round(newW / ratio);
+                            }
+                            if (newH < minH) {
+                                newH = minH;
+                                newW = Math.round(newH * ratio);
+                            }
+                        }
+
+                        int newLeft = resizeLeft ? startRight - newW : startContentLeft;
+                        int newTop = resizeTop ? startBottom - newH : startContentTop;
+
+                        setContentSize(lp, item, newW, newH);
+                        lp.x = newLeft - editorSidePx();
+                        lp.y = newTop - editorTopPx();
+                        clampPosition(lp, item);
+                        syncContentHostToWindow(id);
+                        try { wm.updateViewLayout(root, lp); } catch (Exception ignored) {}
+                        return true;
+
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        persistGeometry(id);
+                        return true;
+                }
+                return true;
+            }
+        });
+    }
+
+    private void installResizeAxis(View handle, View root, String id, boolean horizontal) {
+        handle.setOnTouchListener(new View.OnTouchListener() {
+            int startContentW;
+            int startContentH;
+            float down;
+
+            @Override public boolean onTouch(View v, MotionEvent event) {
+                WindowManager.LayoutParams lp = params.get(id);
+                OverlayItem item = itemCache.get(id);
+                if (lp == null || item == null || item.locked) return true;
+
+                switch (event.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        startContentW = contentWidthPx(lp);
+                        startContentH = contentHeightPx(lp, item);
+                        down = horizontal ? event.getRawX() : event.getRawY();
+                        return true;
+                    case MotionEvent.ACTION_MOVE:
+                        int delta = Math.round((horizontal ? event.getRawX() : event.getRawY()) - down);
+                        DisplayMetrics dm = getResources().getDisplayMetrics();
+                        int maxW = Math.max(Ui.dp(OverlayService.this, 80), dm.widthPixels - editorSidePx() * 2);
+                        int maxH = Math.max(Ui.dp(OverlayService.this, 80), dm.heightPixels - editorTopPx() - editorBottomPx(item));
+                        int newW = horizontal ? clamp(startContentW + delta, Ui.dp(OverlayService.this, 80), maxW) : startContentW;
+                        int newH = horizontal ? startContentH : clamp(startContentH + delta, Ui.dp(OverlayService.this, 80), maxH);
+                        setContentSize(lp, item, newW, newH);
+                        clampPosition(lp, item);
+                        syncContentHostToWindow(id);
+                        try { wm.updateViewLayout(root, lp); } catch (Exception ignored) {}
+                        return true;
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        persistGeometry(id);
+                        return true;
+                }
+                return true;
+            }
+        });
+    }
+
+    private void applyControllerModeToAll() {
+        for (Map.Entry<String, OverlayItem> e : itemCache.entrySet()) {
+            applyEditorState(e.getKey(), e.getValue().locked);
+        }
+    }
+
+    private void applyTextGravity(EditText edit, OverlayItem item) {
+        int horizontal = Gravity.CENTER_HORIZONTAL;
+        if ("left".equals(item.textHorizontal)) horizontal = Gravity.START;
+        else if ("right".equals(item.textHorizontal)) horizontal = Gravity.END;
+
+        int vertical = Gravity.CENTER_VERTICAL;
+        if ("top".equals(item.textVertical)) vertical = Gravity.TOP;
+        else if ("bottom".equals(item.textVertical)) vertical = Gravity.BOTTOM;
+
+        edit.setGravity(horizontal | vertical);
+    }
+
+    private void setTextHorizontal(String id, String value) {
+        OverlayItem item = itemCache.get(id);
+        EditText edit = textEditors.get(id);
+        if (item == null || edit == null) return;
+        item.textHorizontal = value;
+        applyTextGravity(edit, item);
+        repo.upsert(item);
+    }
+
+    private void setTextVertical(String id, String value) {
+        OverlayItem item = itemCache.get(id);
+        EditText edit = textEditors.get(id);
+        if (item == null || edit == null) return;
+        item.textVertical = value;
+        applyTextGravity(edit, item);
+        repo.upsert(item);
     }
 
     private TextView miniChip(String label) {
@@ -464,6 +866,14 @@ public class OverlayService extends Service {
         return g;
     }
 
+    private GradientDrawable lockedEditorBorder() {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(Color.TRANSPARENT);
+        g.setStroke(Ui.dp(this, 1), 0x99FFFFFF);
+        g.setCornerRadius(Ui.dp(this, 8));
+        return g;
+    }
+
     private void installDrag(View handle, View root, String id) {
         handle.setOnTouchListener(new View.OnTouchListener() {
             int startX;
@@ -488,7 +898,7 @@ public class OverlayService extends Service {
                     case MotionEvent.ACTION_MOVE:
                         lp.x = startX + Math.round(event.getRawX() - downX);
                         lp.y = startY + Math.round(event.getRawY() - downY);
-                        clampPosition(lp);
+                        clampPosition(lp, item);
                         try { wm.updateViewLayout(root, lp); } catch (Exception ignored) {}
                         return true;
 
@@ -502,10 +912,10 @@ public class OverlayService extends Service {
         });
     }
 
-    private void installResize(View handle, View root, String id) {
+    private void installResize(View handle, View root, String id, boolean preserveImageRatio) {
         handle.setOnTouchListener(new View.OnTouchListener() {
-            int startW;
-            int startH;
+            int startContentW;
+            int startContentH;
             float downX;
             float downY;
 
@@ -517,22 +927,53 @@ public class OverlayService extends Service {
                 switch (event.getActionMasked()) {
                     case MotionEvent.ACTION_DOWN:
                         finishTextEdit(id);
-                        startW = lp.width;
-                        startH = lp.height;
+                        startContentW = contentWidthPx(lp);
+                        startContentH = contentHeightPx(lp, item);
                         downX = event.getRawX();
                         downY = event.getRawY();
                         return true;
 
                     case MotionEvent.ACTION_MOVE:
+                        int dx = Math.round(event.getRawX() - downX);
+                        int dy = Math.round(event.getRawY() - downY);
                         int minW = Ui.dp(OverlayService.this,
                                 OverlayItem.TYPE_TEXT.equals(item.type) ? 120 : 80);
                         int minH = Ui.dp(OverlayService.this,
                                 OverlayItem.TYPE_TEXT.equals(item.type) ? 54 : 80);
                         DisplayMetrics dm = getResources().getDisplayMetrics();
-                        int maxW = Math.max(minW, dm.widthPixels - Math.max(0, lp.x));
-                        int maxH = Math.max(minH, dm.heightPixels - Math.max(0, lp.y));
-                        lp.width = clamp(startW + Math.round(event.getRawX() - downX), minW, maxW);
-                        lp.height = clamp(startH + Math.round(event.getRawY() - downY), minH, maxH);
+                        int maxW = Math.max(minW, dm.widthPixels - editorSidePx() * 2);
+                        int maxH = Math.max(minH, dm.heightPixels - editorTopPx() - editorBottomPx(item));
+
+                        int newW;
+                        int newH;
+                        if (preserveImageRatio && OverlayItem.TYPE_IMAGE.equals(item.type)
+                                && item.imageAspectRatio > 0.05f) {
+                            float ratio = item.imageAspectRatio;
+                            if (Math.abs(dx) >= Math.abs(dy)) {
+                                newW = clamp(startContentW + dx, minW, maxW);
+                                newH = Math.round(newW / ratio);
+                            } else {
+                                newH = clamp(startContentH + dy, minH, maxH);
+                                newW = Math.round(newH * ratio);
+                            }
+                            if (newW > maxW) {
+                                newW = maxW;
+                                newH = Math.round(newW / ratio);
+                            }
+                            if (newH > maxH) {
+                                newH = maxH;
+                                newW = Math.round(newH * ratio);
+                            }
+                            newW = Math.max(minW, newW);
+                            newH = Math.max(minH, newH);
+                        } else {
+                            newW = clamp(startContentW + dx, minW, maxW);
+                            newH = clamp(startContentH + dy, minH, maxH);
+                        }
+
+                        setContentSize(lp, item, newW, newH);
+                        clampPosition(lp, item);
+                        syncContentHostToWindow(id);
                         try { wm.updateViewLayout(root, lp); } catch (Exception ignored) {}
                         return true;
 
@@ -550,22 +991,26 @@ public class OverlayService extends Service {
         return Math.max(min, Math.min(max, value));
     }
 
-    private void clampPosition(WindowManager.LayoutParams lp) {
+    private void clampPosition(WindowManager.LayoutParams lp, OverlayItem item) {
         DisplayMetrics dm = getResources().getDisplayMetrics();
-        int maxX = Math.max(0, dm.widthPixels - lp.width);
-        int maxY = Math.max(0, dm.heightPixels - lp.height);
-        lp.x = clamp(lp.x, 0, maxX);
-        lp.y = clamp(lp.y, 0, maxY);
+        int contentW = contentWidthPx(lp);
+        int contentH = contentHeightPx(lp, item);
+        int minX = -editorSidePx();
+        int minY = -editorTopPx();
+        int maxX = dm.widthPixels - contentW - editorSidePx();
+        int maxY = dm.heightPixels - contentH - editorTopPx();
+        lp.x = clamp(lp.x, minX, Math.max(minX, maxX));
+        lp.y = clamp(lp.y, minY, Math.max(minY, maxY));
     }
 
     private void persistGeometry(String id) {
         OverlayItem item = itemCache.get(id);
         WindowManager.LayoutParams lp = params.get(id);
         if (item == null || lp == null) return;
-        item.x = lp.x;
-        item.y = lp.y;
-        item.widthDp = Math.max(1, pxToDp(lp.width));
-        item.heightDp = Math.max(1, pxToDp(lp.height));
+        item.x = lp.x + editorSidePx();
+        item.y = lp.y + editorTopPx();
+        item.widthDp = Math.max(1, pxToDp(contentWidthPx(lp)));
+        item.heightDp = Math.max(1, pxToDp(contentHeightPx(lp, item)));
         repo.upsert(item);
     }
 
@@ -685,12 +1130,11 @@ public class OverlayService extends Service {
             return;
         }
 
-        // Critical v2 rule: capture the exact geometry currently on-screen BEFORE
-        // changing any WindowManager flags. Lock never recalculates x/y or size.
-        item.x = lp.x;
-        item.y = lp.y;
-        item.widthDp = Math.max(1, pxToDp(lp.width));
-        item.heightDp = Math.max(1, pxToDp(lp.height));
+        // Preserve the CONTENT rectangle exactly. Editor controls live outside it.
+        item.x = lp.x + editorSidePx();
+        item.y = lp.y + editorTopPx();
+        item.widthDp = Math.max(1, pxToDp(contentWidthPx(lp)));
+        item.heightDp = Math.max(1, pxToDp(contentHeightPx(lp, item)));
         item.locked = locked;
 
         if (stored != null) {
@@ -699,6 +1143,9 @@ public class OverlayService extends Service {
             stored.widthDp = item.widthDp;
             stored.heightDp = item.heightDp;
             stored.locked = locked;
+            stored.imageAspectRatio = item.imageAspectRatio;
+            stored.textHorizontal = item.textHorizontal;
+            stored.textVertical = item.textVertical;
             if (OverlayItem.TYPE_TEXT.equals(item.type)) {
                 EditText edit = textEditors.get(id);
                 if (edit != null) stored.text = edit.getText().toString();
@@ -707,31 +1154,34 @@ public class OverlayService extends Service {
             itemCache.put(id, item);
         }
 
-        if (locked) {
-            finishTextEdit(id);
-            lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
-            lp.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
-        } else {
-            lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
-            lp.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
-        }
-        lp.alpha = lockedAlpha(locked);
-
-        applyEditorState(id, locked);
-        try { wm.updateViewLayout(root, lp); } catch (Exception ignored) {}
+        if (locked) finishTextEdit(id);
         repo.upsert(item);
+        applyEditorState(id, locked);
     }
 
     private void applyEditorState(String id, boolean locked) {
         FrameLayout root = roots.get(id);
-        if (root == null) return;
+        FrameLayout contentHost = contentHosts.get(id);
+        WindowManager.LayoutParams lp = params.get(id);
+        OverlayItem item = itemCache.get(id);
+        if (root == null || lp == null || item == null) return;
 
         List<View> chrome = editorChrome.get(id);
         if (chrome != null) {
             for (View v : chrome) v.setVisibility(locked ? View.GONE : View.VISIBLE);
         }
 
-        root.setBackground(locked ? null : editorBorder());
+        View unlockSurface = unlockSurfaces.get(id);
+        TextView lockedHint = lockedHints.get(id);
+        boolean longPressUnlock = locked && controllerVisible;
+        if (unlockSurface != null) unlockSurface.setVisibility(longPressUnlock ? View.VISIBLE : View.GONE);
+        if (lockedHint != null) lockedHint.setVisibility(longPressUnlock ? View.VISIBLE : View.GONE);
+
+        if (contentHost != null) {
+            if (!locked) contentHost.setForeground(editorBorder());
+            else if (controllerVisible) contentHost.setForeground(lockedEditorBorder());
+            else contentHost.setForeground(null);
+        }
 
         EditText edit = textEditors.get(id);
         if (edit != null) {
@@ -741,6 +1191,17 @@ public class OverlayService extends Service {
                 edit.setFocusable(false);
             }
         }
+
+        lp.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+        if (locked && !controllerVisible) {
+            lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            lp.alpha = lockedAlpha(true);
+        } else {
+            lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            lp.alpha = 1.0f;
+        }
+
+        try { wm.updateViewLayout(root, lp); } catch (Exception ignored) {}
     }
 
     private void removeAll() {
@@ -770,6 +1231,9 @@ public class OverlayService extends Service {
         }
 
         roots.clear();
+        contentHosts.clear();
+        unlockSurfaces.clear();
+        lockedHints.clear();
         params.clear();
         itemCache.clear();
         editorChrome.clear();

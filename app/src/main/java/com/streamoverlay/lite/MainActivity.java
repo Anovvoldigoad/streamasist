@@ -6,11 +6,13 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.text.InputType;
+import android.util.DisplayMetrics;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -21,6 +23,7 @@ import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.InputStream;
 import java.util.List;
 
 public class MainActivity extends Activity {
@@ -39,7 +42,7 @@ public class MainActivity extends Activity {
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         repo = new OverlayRepository(this);
-        // Keep overlay windows out of the controller UI itself.
+        // Keep overlays visible in the controller so the app itself becomes the editor surface.
         repo.prefs().edit().putBoolean("controller_visible", true).apply();
         buildUi();
         notifyControllerVisibility(true);
@@ -125,11 +128,11 @@ public class MainActivity extends Activity {
         LinearLayout addRow = Ui.row(this);
         Button addText = Ui.button(this, "+ Text");
         Button addImage = Ui.button(this, "+ Image / GIF");
-        Button addDonation = Ui.button(this, "+ Donation URL");
+        Button addDonation = Ui.button(this, "+ Overlay Link");
 
         addText.setOnClickListener(v -> addTextOverlay());
         addImage.setOnClickListener(v -> pickImage(null));
-        addDonation.setOnClickListener(v -> showDonationUrlDialog(null));
+        addDonation.setOnClickListener(v -> showOverlayLinkDialog(null));
 
         addRow.addView(addText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         addRow.addView(addImage, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -137,7 +140,7 @@ public class MainActivity extends Activity {
         root.addView(addDonation, Ui.matchWrap(6, this));
 
         TextView hint = Ui.text(this,
-                "UNLOCK: geser, resize, dan edit langsung di layar. LOCK: posisi tetap dan overlay tidak bisa disentuh.",
+                "UNLOCK: pakai ✥ MOVE untuk pindah, tarik sisi/pojok untuk resize. LOCK: posisi tetap. Saat app ini terbuka, tahan overlay yang terkunci untuk unlock.",
                 13, 0xFF9FA5B0);
         hint.setPadding(0, Ui.dp(this, 14), 0, Ui.dp(this, 10));
         root.addView(hint);
@@ -187,7 +190,7 @@ public class MainActivity extends Activity {
         LinearLayout top = Ui.row(this);
         String typeLabel = OverlayItem.TYPE_TEXT.equals(item.type) ? "TEXT"
                 : OverlayItem.TYPE_IMAGE.equals(item.type) ? "IMAGE / GIF"
-                : "DONATION URL";
+                : "OVERLAY LINK";
         TextView name = Ui.text(this, item.title + "  ·  " + typeLabel, 16, Color.WHITE);
         name.setTypeface(null, android.graphics.Typeface.BOLD);
         top.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -200,7 +203,7 @@ public class MainActivity extends Activity {
         if (OverlayItem.TYPE_DONATION.equals(item.type)) {
             TextView source = Ui.text(this,
                     item.sourceUrl == null || item.sourceUrl.isEmpty()
-                            ? "Belum ada source URL"
+                            ? "Belum ada overlay URL"
                             : shortUrl(item.sourceUrl),
                     12, 0xFF9FA5B0);
             card.addView(source);
@@ -214,7 +217,7 @@ public class MainActivity extends Activity {
         LinearLayout buttons = Ui.row(this);
         Button lock = Ui.button(this, item.locked ? "🔒 Locked" : "🔓 Unlock");
         Button edit = Ui.button(this,
-                OverlayItem.TYPE_DONATION.equals(item.type) ? "Source"
+                OverlayItem.TYPE_DONATION.equals(item.type) ? "Link"
                         : OverlayItem.TYPE_IMAGE.equals(item.type) ? "Replace"
                         : "Edit on screen");
         Button delete = Ui.button(this, "Delete");
@@ -241,7 +244,7 @@ public class MainActivity extends Activity {
 
         edit.setOnClickListener(v -> {
             if (OverlayItem.TYPE_DONATION.equals(item.type)) {
-                showDonationUrlDialog(item);
+                showOverlayLinkDialog(item);
             } else if (OverlayItem.TYPE_IMAGE.equals(item.type)) {
                 pickImage(item.id);
             } else {
@@ -283,8 +286,8 @@ public class MainActivity extends Activity {
         renderLayers();
     }
 
-    private void showDonationUrlDialog(OverlayItem existing) {
-        final EditText input = Ui.input(this, "https://... source URL");
+    private void showOverlayLinkDialog(OverlayItem existing) {
+        final EditText input = Ui.input(this, "https://... overlay link");
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         if (existing != null && existing.sourceUrl != null) input.setText(existing.sourceUrl);
         input.setSelection(input.getText().length());
@@ -292,8 +295,8 @@ public class MainActivity extends Activity {
         input.setPadding(p, p, p, p);
 
         AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle(existing == null ? "Donation source" : "Ganti donation source")
-                .setMessage("Paste link widget/source dari Saweria, Trakteer, Streamlabs, atau provider lain.")
+                .setTitle(existing == null ? "Overlay Link" : "Ganti Overlay Link")
+                .setMessage("Paste link overlay/widget dari Saweria, Trakteer, Streamlabs, atau provider lain.")
                 .setView(input)
                 .setNegativeButton("Batal", null)
                 .setPositiveButton(existing == null ? "Tambah" : "Simpan", null)
@@ -305,7 +308,7 @@ public class MainActivity extends Activity {
                 input.setError("Gunakan URL https://");
                 return;
             }
-            OverlayItem item = existing == null ? OverlayItem.donationDefault(url) : existing;
+            OverlayItem item = existing == null ? OverlayItem.overlayLinkDefault(url) : existing;
             item.sourceUrl = url;
             item.enabled = true;
             if (existing == null) item.locked = false;
@@ -355,16 +358,67 @@ public class MainActivity extends Activity {
                 if (item != null) {
                     item.imageUri = uri.toString();
                     item.enabled = true;
+                    configureImageGeometry(item, uri, false);
                     repo.upsert(item);
                 }
             } else {
-                repo.upsert(OverlayItem.imageDefault(uri.toString()));
+                OverlayItem item = OverlayItem.imageDefault(uri.toString());
+                configureImageGeometry(item, uri, true);
+                repo.upsert(item);
             }
             replaceImageId = null;
             ensureEngineIfNeeded();
             refreshOverlayEngine();
             renderLayers();
         }
+    }
+
+
+    private void configureImageGeometry(OverlayItem item, Uri uri, boolean newItem) {
+        int sourceW = 0;
+        int sourceH = 0;
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inJustDecodeBounds = true;
+            BitmapFactory.decodeStream(in, null, options);
+            sourceW = options.outWidth;
+            sourceH = options.outHeight;
+        } catch (Exception ignored) {}
+
+        if (sourceW <= 0 || sourceH <= 0) return;
+
+        float ratio = sourceW / (float) sourceH;
+        item.imageAspectRatio = ratio;
+
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        int maxW = Math.max(120, Math.round((dm.widthPixels / dm.density) * 0.72f));
+        int maxH = Math.max(120, Math.round((dm.heightPixels / dm.density) * 0.48f));
+
+        int naturalW = Math.max(1, Math.round(sourceW / dm.density));
+        int naturalH = Math.max(1, Math.round(sourceH / dm.density));
+
+        if (!newItem) {
+            naturalW = Math.max(1, item.widthDp);
+            naturalH = Math.max(1, Math.round(naturalW / ratio));
+        }
+
+        float scale = Math.min(1f, Math.min(maxW / (float) naturalW, maxH / (float) naturalH));
+        float targetW = naturalW * scale;
+        float targetH = naturalH * scale;
+
+        // Keep the media's natural aspect ratio. Only enlarge tiny assets enough
+        // to make the resize handles practical, then fit back inside screen bounds.
+        if (targetW < 48f || targetH < 48f) {
+            float grow = Math.max(48f / Math.max(1f, targetW), 48f / Math.max(1f, targetH));
+            targetW *= grow;
+            targetH *= grow;
+        }
+        float fit = Math.min(1f, Math.min(maxW / Math.max(1f, targetW), maxH / Math.max(1f, targetH)));
+        targetW *= fit;
+        targetH *= fit;
+
+        item.widthDp = Math.max(1, Math.round(targetW));
+        item.heightDp = Math.max(1, Math.round(targetH));
     }
 
     private void requestOverlayPermission() {

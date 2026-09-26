@@ -15,7 +15,7 @@ public class OverlayItem {
     public boolean enabled = true;
     public boolean locked = false;
 
-    // Pixel coordinates are the source of truth while the display configuration is unchanged.
+    // x/y always represent the CONTENT top-left, not the editor controls around it.
     public int x = 24;
     public int y = 160;
     public int widthDp = 220;
@@ -25,8 +25,13 @@ public class OverlayItem {
     public float textSizeSp = 26f;
     public String textColor = "#FFFFFFFF";
     public String backgroundColor = "#00000000";
+    public String textHorizontal = "center"; // left, center, right
+    public String textVertical = "center";   // top, center, bottom
 
     public String imageUri = "";
+    // Natural media width / height. Used by the proportional resize handle.
+    public float imageAspectRatio = 0f;
+
     public String sourceUrl = "";
 
     public static OverlayItem textDefault() {
@@ -39,6 +44,8 @@ public class OverlayItem {
         i.textSizeSp = 26f;
         i.textColor = "#FFFFFFFF";
         i.backgroundColor = "#00000000";
+        i.textHorizontal = "center";
+        i.textVertical = "center";
         return i;
     }
 
@@ -49,17 +56,23 @@ public class OverlayItem {
         i.imageUri = uri == null ? "" : uri;
         i.widthDp = 180;
         i.heightDp = 180;
+        i.imageAspectRatio = 0f;
         return i;
     }
 
-    public static OverlayItem donationDefault(String url) {
+    public static OverlayItem overlayLinkDefault(String url) {
         OverlayItem i = new OverlayItem();
         i.type = TYPE_DONATION;
-        i.title = "Donation Alert";
+        i.title = "Overlay Link";
         i.sourceUrl = url == null ? "" : url;
         i.widthDp = 320;
         i.heightDp = 180;
         return i;
+    }
+
+    // Compatibility alias for older source/repositories.
+    public static OverlayItem donationDefault(String url) {
+        return overlayLinkDefault(url);
     }
 
     public JSONObject toJson() throws JSONException {
@@ -77,7 +90,10 @@ public class OverlayItem {
         o.put("textSizeSp", textSizeSp);
         o.put("textColor", textColor);
         o.put("backgroundColor", backgroundColor);
+        o.put("textHorizontal", textHorizontal);
+        o.put("textVertical", textVertical);
         o.put("imageUri", imageUri);
+        o.put("imageAspectRatio", imageAspectRatio);
         o.put("sourceUrl", sourceUrl);
         return o;
     }
@@ -87,6 +103,12 @@ public class OverlayItem {
         i.id = o.optString("id", i.id);
         i.type = o.optString("type", TYPE_TEXT);
         i.title = o.optString("title", "Overlay");
+        if (TYPE_DONATION.equals(i.type)
+                && (i.title == null || i.title.trim().isEmpty()
+                || "Donation Alert".equalsIgnoreCase(i.title)
+                || "Donation source".equalsIgnoreCase(i.title))) {
+            i.title = "Overlay Link";
+        }
         i.enabled = o.optBoolean("enabled", true);
         i.locked = o.optBoolean("locked", false);
         i.x = o.optInt("x", 24);
@@ -97,11 +119,12 @@ public class OverlayItem {
         i.textSizeSp = (float) o.optDouble("textSizeSp", 26.0);
         i.textColor = o.optString("textColor", "#FFFFFFFF");
         i.backgroundColor = o.optString("backgroundColor", "#00000000");
+        i.textHorizontal = o.optString("textHorizontal", "center");
+        i.textVertical = o.optString("textVertical", "center");
         i.imageUri = o.optString("imageUri", "");
+        i.imageAspectRatio = (float) o.optDouble("imageAspectRatio", 1.0);
+        if (i.imageAspectRatio <= 0f) i.imageAspectRatio = 0f;
         i.sourceUrl = o.optString("sourceUrl", "");
-
-        // v1 migration: the old donation item had no sourceUrl. It stays editable in v2.
-        if (TYPE_DONATION.equals(i.type) && i.sourceUrl == null) i.sourceUrl = "";
         return i;
     }
 }

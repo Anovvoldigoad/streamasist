@@ -10,8 +10,8 @@ android {
         applicationId 'com.streamoverlay.lite'
         minSdk 28
         targetSdk 36
-        versionCode 202
-        versionName '2.0.2'
+        versionCode 211
+        versionName '2.1.1'
     }
 
     buildTypes {
