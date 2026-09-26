@@ -96,14 +96,23 @@ Langkah:
 
 Beberapa aplikasi Android dapat menyembunyikan third-party overlays. Selain itu, Android 14 single-app screen sharing dapat mengecualikan overlay aplikasi lain. Untuk livestream, gunakan full-display/screen capture bila aplikasi streaming menyediakan pilihan tersebut dan selalu tes output dari sisi viewer.
 
-## Upgrade note — v2.0.1
+## Upgrade note — v2.0.2
 
 If this project is uploaded over a repository that previously contained v1,
 GitHub does not automatically delete source files that are absent from the new
-upload. v2.0.1 therefore includes neutral tombstone files for the old
+upload. v2.0.2 therefore includes neutral tombstone files for the old
 `OverlayEditorActivity.java` and `DonationNotificationListener.java`, preventing
 stale v1 code from being compiled.
 
 If you maintain the repository with Git locally, you may delete those two
 `tombstone files` after confirming the old classes are gone from Git history's
 current tree; they are not used by the app at runtime.
+
+
+## v2.0.2 runtime UI fix
+
+- The controller dashboard hides this app's own system-overlay windows while the dashboard is visible, preventing a saved/full-screen overlay from covering the app itself.
+- Overlay windows are restored automatically when the user leaves the controller to start streaming.
+- Overlay permission settings and the image picker keep overlays hidden while those external setup screens are open.
+- Notification permission is no longer requested immediately on first launch; it is requested when the overlay engine is enabled.
+- Donation WebView begins invisible and is revealed only after transparency is applied, with a fallback reveal, reducing black/white loading flashes.

@@ -34,17 +34,30 @@ public class MainActivity extends Activity {
     private Switch engineSwitch;
     private boolean rendering;
     private String replaceImageId;
+    private boolean externalFlowOpen;
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         repo = new OverlayRepository(this);
+        // Keep overlay windows out of the controller UI itself.
+        repo.prefs().edit().putBoolean("controller_visible", true).apply();
         buildUi();
-        requestNotificationPermissionIfNeeded();
+        notifyControllerVisibility(true);
     }
 
     @Override protected void onResume() {
         super.onResume();
+        externalFlowOpen = false;
+        repo.prefs().edit().putBoolean("controller_visible", true).apply();
+        notifyControllerVisibility(true);
         renderState();
+    }
+
+    @Override protected void onStop() {
+        super.onStop();
+        if (isChangingConfigurations() || externalFlowOpen) return;
+        repo.prefs().edit().putBoolean("controller_visible", false).apply();
+        notifyControllerVisibility(false);
     }
 
     private void buildUi() {
@@ -97,6 +110,7 @@ public class MainActivity extends Activity {
                     return;
                 }
                 repo.prefs().edit().putBoolean("engine_enabled", true).apply();
+                requestNotificationPermissionIfNeeded();
                 startOverlayEngine();
             } else {
                 repo.prefs().edit().putBoolean("engine_enabled", false).apply();
@@ -320,6 +334,7 @@ public class MainActivity extends Activity {
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("image/*");
+        externalFlowOpen = true;
         startActivityForResult(i, idToReplace == null ? REQ_IMAGE : REQ_REPLACE_IMAGE);
     }
 
@@ -353,6 +368,7 @@ public class MainActivity extends Activity {
     }
 
     private void requestOverlayPermission() {
+        externalFlowOpen = true;
         Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                 Uri.parse("package:" + getPackageName()));
         startActivity(i);
@@ -374,6 +390,19 @@ public class MainActivity extends Activity {
             engineSwitch.setChecked(true);
             rendering = false;
             startOverlayEngine();
+        }
+    }
+
+    private void notifyControllerVisibility(boolean visible) {
+        if (!repo.prefs().getBoolean("engine_enabled", false)
+                || !Settings.canDrawOverlays(this)) return;
+        Intent i = new Intent(this, OverlayService.class)
+                .setAction(OverlayService.ACTION_CONTROLLER_VISIBILITY)
+                .putExtra("visible", visible);
+        try {
+            startService(i);
+        } catch (Exception ignored) {
+            if (!visible) startOverlayEngine();
         }
     }
 

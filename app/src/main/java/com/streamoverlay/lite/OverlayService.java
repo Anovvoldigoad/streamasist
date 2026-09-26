@@ -42,6 +42,7 @@ import java.util.Map;
 public class OverlayService extends Service {
     public static final String ACTION_REFRESH = "com.streamoverlay.lite.REFRESH";
     public static final String ACTION_SET_LOCK = "com.streamoverlay.lite.SET_LOCK";
+    public static final String ACTION_CONTROLLER_VISIBILITY = "com.streamoverlay.lite.CONTROLLER_VISIBILITY";
 
     private static final int NOTIFICATION_ID = 4242;
     private static final String CHANNEL_ID = "overlay_engine";
@@ -108,13 +109,30 @@ public class OverlayService extends Service {
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        String action = intent == null ? null : intent.getAction();
+
+        if (ACTION_CONTROLLER_VISIBILITY.equals(action)) {
+            boolean visible = intent.getBooleanExtra("visible", false);
+            repo.prefs().edit().putBoolean("controller_visible", visible).apply();
+            if (visible) {
+                removeAll();
+                return START_STICKY;
+            }
+        }
+
         if (!repo.prefs().getBoolean("engine_enabled", false)
                 || !Settings.canDrawOverlays(this)) {
+            removeAll();
             stopSelf();
             return START_NOT_STICKY;
         }
 
-        String action = intent == null ? null : intent.getAction();
+        // The controller must always stay usable. Never draw system overlays over it.
+        if (repo.prefs().getBoolean("controller_visible", false)) {
+            removeAll();
+            return START_STICKY;
+        }
+
         if (ACTION_SET_LOCK.equals(action)) {
             String id = intent.getStringExtra("id");
             boolean locked = intent.getBooleanExtra("locked", false);
@@ -234,6 +252,8 @@ public class OverlayService extends Service {
     private View createDonationSource(OverlayItem item) {
         WebView web = new WebView(this);
         web.setBackgroundColor(Color.TRANSPARENT);
+        // Avoid a black/white WebView flash while a widget source is loading.
+        web.setVisibility(View.INVISIBLE);
         web.setOverScrollMode(View.OVER_SCROLL_NEVER);
         web.setVerticalScrollBarEnabled(false);
         web.setHorizontalScrollBarEnabled(false);
@@ -254,6 +274,10 @@ public class OverlayService extends Service {
         web.setWebViewClient(new WebViewClient() {
             @Override public void onPageFinished(WebView view, String url) {
                 forceTransparentPage(view);
+                view.postDelayed(() -> {
+                    forceTransparentPage(view);
+                    view.setVisibility(View.VISIBLE);
+                }, 120);
                 view.postDelayed(() -> forceTransparentPage(view), 700);
                 view.postDelayed(() -> forceTransparentPage(view), 1800);
             }
@@ -262,6 +286,12 @@ public class OverlayService extends Service {
         String url = item.sourceUrl == null ? "" : item.sourceUrl.trim();
         if (isHttps(url)) {
             web.loadUrl(url);
+            web.postDelayed(() -> {
+                if (web.getVisibility() != View.VISIBLE) {
+                    forceTransparentPage(web);
+                    web.setVisibility(View.VISIBLE);
+                }
+            }, 2500);
         } else {
             web.loadDataWithBaseURL(
                     null,
