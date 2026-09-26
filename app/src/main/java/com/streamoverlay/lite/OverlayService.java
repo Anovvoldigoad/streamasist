@@ -230,8 +230,8 @@ public class OverlayService extends Service {
     }
 
     private void showDonation(String name, String amount, String message) {
-        if (name == null || name.isBlank()) name = "Anonymous";
-        if (amount == null || amount.isBlank()) amount = "Donation";
+        if (name == null || name.trim().isEmpty()) name = "Anonymous";
+        if (amount == null || amount.trim().isEmpty()) amount = "Donation";
         if (message == null) message = "";
         final String fName = name, fAmount = amount, fMessage = message;
         main.post(() -> {
@@ -255,7 +255,7 @@ public class OverlayService extends Service {
     }
 
     private String formatTemplate(String template, String name, String amount, String message) {
-        String t = template == null || template.isBlank() ? "{name} • {amount}\n{message}" : template;
+        String t = template == null || template.trim().isEmpty() ? "{name} • {amount}\n{message}" : template;
         return t.replace("{name}", name).replace("{amount}", amount).replace("{message}", message);
     }
 
@@ -326,7 +326,7 @@ public class OverlayService extends Service {
     private String firstString(JSONObject o, String... keys) {
         for (String k : keys) {
             String s = o.optString(k, "");
-            if (!s.isBlank() && !"null".equalsIgnoreCase(s)) return s;
+            if (!s.trim().isEmpty() && !"null".equalsIgnoreCase(s)) return s;
         }
         return "";
     }

@@ -59,7 +59,7 @@ Aplikasi melakukan GET ke endpoint yang kamu isi. Format paling sederhana:
 
 Workflow menggunakan:
 - JDK 17
-- Android API 37
+- Android API 36
 - Android Build Tools 36.0.0
 - Android Gradle Plugin 9.4.0
 - Gradle 9.6.0
