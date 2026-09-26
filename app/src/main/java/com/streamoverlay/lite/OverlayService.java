@@ -75,6 +75,10 @@ public class OverlayService extends Service {
     private final Map<String, EditText> textEditors = new HashMap<>();
     private final Map<String, ImageView> imageViews = new HashMap<>();
     private final Map<String, WebView> webViews = new HashMap<>();
+    // Tiny independent touch target used only while a locked overlay is outside
+    // the controller app. The main overlay stays FLAG_NOT_TOUCHABLE/click-through.
+    private final Map<String, View> externalUnlockHotspots = new HashMap<>();
+    private final Map<String, WindowManager.LayoutParams> externalUnlockHotspotParams = new HashMap<>();
 
     @Override public void onCreate() {
         super.onCreate();
@@ -395,7 +399,8 @@ public class OverlayService extends Service {
     private WindowManager.LayoutParams createParams(OverlayItem item) {
         int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                 | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
+                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
         if (item.locked && !controllerVisible) flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
 
         DisplayMetrics dm = getResources().getDisplayMetrics();
@@ -415,7 +420,8 @@ public class OverlayService extends Service {
         lp.y = item.y - editorTopPx();
         lp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
         lp.alpha = (item.locked && !controllerVisible) ? lockedAlpha(true) : 1.0f;
-        clampPosition(lp, item);
+        // Intentionally do not clamp x/y. Users may park part of an overlay
+        // outside the physical display and bring it back later.
         return lp;
     }
 
@@ -749,7 +755,6 @@ public class OverlayService extends Service {
                         setContentSize(lp, item, newW, newH);
                         lp.x = newLeft - editorSidePx();
                         lp.y = newTop - editorTopPx();
-                        clampPosition(lp, item);
                         syncContentHostToWindow(id);
                         try { wm.updateViewLayout(root, lp); } catch (Exception ignored) {}
                         return true;
@@ -789,7 +794,6 @@ public class OverlayService extends Service {
                         int newW = horizontal ? clamp(startContentW + delta, Ui.dp(OverlayService.this, 80), maxW) : startContentW;
                         int newH = horizontal ? startContentH : clamp(startContentH + delta, Ui.dp(OverlayService.this, 80), maxH);
                         setContentSize(lp, item, newW, newH);
-                        clampPosition(lp, item);
                         syncContentHostToWindow(id);
                         try { wm.updateViewLayout(root, lp); } catch (Exception ignored) {}
                         return true;
@@ -898,7 +902,6 @@ public class OverlayService extends Service {
                     case MotionEvent.ACTION_MOVE:
                         lp.x = startX + Math.round(event.getRawX() - downX);
                         lp.y = startY + Math.round(event.getRawY() - downY);
-                        clampPosition(lp, item);
                         try { wm.updateViewLayout(root, lp); } catch (Exception ignored) {}
                         return true;
 
@@ -972,7 +975,6 @@ public class OverlayService extends Service {
                         }
 
                         setContentSize(lp, item, newW, newH);
-                        clampPosition(lp, item);
                         syncContentHostToWindow(id);
                         try { wm.updateViewLayout(root, lp); } catch (Exception ignored) {}
                         return true;
@@ -1194,6 +1196,7 @@ public class OverlayService extends Service {
 
         lp.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
         if (locked && !controllerVisible) {
+            // Main overlay remains fully click-through over the game/live app.
             lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
             lp.alpha = lockedAlpha(true);
         } else {
@@ -1202,9 +1205,94 @@ public class OverlayService extends Service {
         }
 
         try { wm.updateViewLayout(root, lp); } catch (Exception ignored) {}
+
+        // Outside the controller app Android cannot long-press a NOT_TOUCHABLE
+        // window. Keep the large overlay click-through and create one tiny, fully
+        // transparent long-press target where the lock button used to live.
+        if (locked && !controllerVisible) {
+            showExternalUnlockHotspot(id);
+        } else {
+            removeExternalUnlockHotspot(id);
+        }
+    }
+
+    private void showExternalUnlockHotspot(String id) {
+        WindowManager.LayoutParams overlayLp = params.get(id);
+        OverlayItem item = itemCache.get(id);
+        if (overlayLp == null || item == null || !item.locked || controllerVisible) {
+            removeExternalUnlockHotspot(id);
+            return;
+        }
+
+        final int size = Ui.dp(this, 48);
+        WindowManager.LayoutParams hp = externalUnlockHotspotParams.get(id);
+        View hotspot = externalUnlockHotspots.get(id);
+
+        if (hotspot == null) {
+            hotspot = new View(this);
+            hotspot.setBackgroundColor(Color.TRANSPARENT);
+            hotspot.setClickable(true);
+            hotspot.setLongClickable(true);
+            final String overlayId = id;
+            hotspot.setOnLongClickListener(v -> {
+                setLockedRuntime(overlayId, false);
+                return true;
+            });
+
+            int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                    | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                    | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
+            hp = new WindowManager.LayoutParams(
+                    size, size,
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    flags,
+                    PixelFormat.TRANSLUCENT);
+            hp.gravity = Gravity.TOP | Gravity.START;
+            hp.alpha = 1.0f;
+
+            externalUnlockHotspots.put(id, hotspot);
+            externalUnlockHotspotParams.put(id, hp);
+            positionExternalUnlockHotspot(id);
+            try { wm.addView(hotspot, hp); } catch (Exception e) {
+                externalUnlockHotspots.remove(id);
+                externalUnlockHotspotParams.remove(id);
+            }
+        } else {
+            positionExternalUnlockHotspot(id);
+            try { wm.updateViewLayout(hotspot, hp); } catch (Exception ignored) {}
+        }
+    }
+
+    private void positionExternalUnlockHotspot(String id) {
+        WindowManager.LayoutParams overlayLp = params.get(id);
+        WindowManager.LayoutParams hp = externalUnlockHotspotParams.get(id);
+        if (overlayLp == null || hp == null) return;
+        int size = Ui.dp(this, 48);
+        // Same general spot as the visible lock chip in UNLOCK mode: the
+        // top-right editor area, outside the actual content box.
+        hp.x = overlayLp.x + overlayLp.width - size;
+        hp.y = overlayLp.y;
+    }
+
+    private void removeExternalUnlockHotspot(String id) {
+        View hotspot = externalUnlockHotspots.remove(id);
+        externalUnlockHotspotParams.remove(id);
+        if (hotspot != null) {
+            try { wm.removeViewImmediate(hotspot); } catch (Exception ignored) {}
+        }
+    }
+
+    private void removeAllExternalUnlockHotspots() {
+        for (View hotspot : new ArrayList<>(externalUnlockHotspots.values())) {
+            try { wm.removeViewImmediate(hotspot); } catch (Exception ignored) {}
+        }
+        externalUnlockHotspots.clear();
+        externalUnlockHotspotParams.clear();
     }
 
     private void removeAll() {
+        removeAllExternalUnlockHotspots();
         for (Map.Entry<String, FrameLayout> entry : roots.entrySet()) {
             String id = entry.getKey();
             ImageView image = imageViews.get(id);
