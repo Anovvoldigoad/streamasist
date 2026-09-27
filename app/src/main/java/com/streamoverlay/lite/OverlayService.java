@@ -290,6 +290,11 @@ public class OverlayService extends Service {
             syncContentHostToWindow(item.id);
             persistGeometry(item.id);
             applyEditorState(item.id, item.locked);
+
+            // A newly-added overlay is newer than the controller window and can
+            // otherwise cover it. Promote the controller back to the top so the
+            // bubble always stays visible and receives touch first on overlap.
+            bringGlobalControllerToFront();
         } catch (Exception e) {
             destroyContent(item.id, content);
         }
@@ -1085,6 +1090,31 @@ public class OverlayService extends Service {
         } catch (Exception ignored) {}
     }
 
+    private void bringGlobalControllerToFront() {
+        final FrameLayout controller = globalControllerRoot;
+        if (controller == null || globalControllerParams == null || controllerVisible) return;
+
+        // Run after the current touch/click dispatch finishes. This is important
+        // when an overlay is enabled from a button that lives inside the bubble
+        // menu itself; re-attaching that same window synchronously during its own
+        // click callback can be flaky on some OEM WindowManager implementations.
+        controller.post(() -> {
+            if (controller != globalControllerRoot
+                    || globalControllerParams == null
+                    || controllerVisible) return;
+            try {
+                // Same-type application-overlay windows do not expose a public
+                // z-index API. Re-attaching the tiny controller window makes it
+                // the newest window, keeping it above all content overlays and
+                // ensuring bubble touch wins when windows overlap.
+                wm.removeViewImmediate(controller);
+                wm.addView(controller, globalControllerParams);
+            } catch (Exception ignored) {
+                // Keep the foreground service alive on OEM-specific failures.
+            }
+        });
+    }
+
     private void setControllerExpanded(boolean expanded) {
         if (globalControllerRoot == null || globalControllerParams == null || globalControllerMenu == null) return;
         int size = Ui.dp(this, CONTROLLER_SIZE_DP);
@@ -1307,8 +1337,18 @@ public class OverlayService extends Service {
                         int minH = Ui.dp(OverlayService.this,
                                 OverlayItem.TYPE_TEXT.equals(item.type) ? 54 : 80);
                         DisplayMetrics dm = getResources().getDisplayMetrics();
-                        int maxW = Math.max(minW, dm.widthPixels - editorSidePx() * 2);
-                        int maxH = Math.max(minH, dm.heightPixels - editorTopPx() - editorBottomPx(item));
+                        boolean isImageLayer = OverlayItem.TYPE_IMAGE.equals(item.type);
+                        // Image/GIF may be intentionally much larger than the
+                        // physical screen. FLAG_LAYOUT_NO_LIMITS already lets the
+                        // window extend off-screen, so give media a generous 4x
+                        // screen editing range while keeping other overlay types
+                        // conservative.
+                        int maxW = isImageLayer
+                                ? Math.max(minW, dm.widthPixels * 4)
+                                : Math.max(minW, dm.widthPixels - editorSidePx() * 2);
+                        int maxH = isImageLayer
+                                ? Math.max(minH, dm.heightPixels * 4)
+                                : Math.max(minH, dm.heightPixels - editorTopPx() - editorBottomPx(item));
 
                         int newW;
                         int newH;

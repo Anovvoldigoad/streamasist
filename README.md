@@ -1,10 +1,11 @@
-# StreamOverlayLite v2.2.0
+# StreamOverlayLite v2.2.1
 
-Resize fix untuk Overlay Link:
-- WebView sekarang memakai fixed browser canvas.
-- Handle kanan-bawah menskalakan seluruh canvas sebagai satu visual surface.
-- DOM/halaman tidak di-resize pada setiap gerakan, sehingga tidak reflow/pecah/dobel saat ditarik.
-- Project lama v2.1.9 otomatis dimigrasi: ukuran frame terakhir menjadi canvas dasar baru pada skala 1x.
-- Overlay Link tetap transparan, MOVE/LOCK tetap seperti v2.1.9, dan floating controller per-overlay tetap ada.
+Perbaikan utama:
+- Floating Controller/bubble selalu dipromosikan menjadi window paling atas setelah overlay baru ditambahkan atau diaktifkan.
+- Saat bubble bertabrakan dengan Text, Image/GIF, atau Overlay Link, bubble tetap terlihat dan tetap menerima touch lebih dulu.
+- Image/GIF sekarang dapat diperbesar sampai sekitar 4x dimensi layar, tidak lagi mentok pada ukuran layar fisik.
+- Resize Image/GIF dari handle kanan-bawah tetap menjaga aspect ratio.
+- Posisi media tetap boleh melewati batas layar seperti versi sebelumnya.
+- Overlay Link tetap memakai fixed browser canvas dari v2.2.0.
 
-Catatan: gunakan URL Browser Source/Overlay Link dari provider, bukan URL halaman dashboard/pengaturan.
+Catatan performa: decoder media tetap membatasi decode gambar/GIF besar agar RAM tidak melonjak. Layer tetap bisa dibesarkan jauh melebihi ukuran decode melalui scaling; sumber beresolusi rendah bisa terlihat lebih blur jika dibesarkan ekstrem.
