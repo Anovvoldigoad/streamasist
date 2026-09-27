@@ -16,14 +16,11 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.IBinder;
-import android.os.Handler;
-import android.os.Looper;
 import android.provider.Settings;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
-import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
@@ -35,6 +32,7 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.util.ArrayList;
@@ -46,7 +44,7 @@ public class OverlayService extends Service {
     public static final String ACTION_REFRESH = "com.streamoverlay.lite.REFRESH";
     public static final String ACTION_SET_LOCK = "com.streamoverlay.lite.SET_LOCK";
     public static final String ACTION_CONTROLLER_VISIBILITY = "com.streamoverlay.lite.CONTROLLER_VISIBILITY";
-    public static final String ACTION_UNLOCK_ALL = "com.streamoverlay.lite.UNLOCK_ALL";
+    public static final String ACTION_TOGGLE_GLOBAL = "com.streamoverlay.lite.TOGGLE_GLOBAL";
 
     private static final int NOTIFICATION_ID = 4242;
     private static final String CHANNEL_ID = "overlay_engine";
@@ -60,10 +58,12 @@ public class OverlayService extends Service {
             Color.TRANSPARENT, 0x88000000, 0x88FFFFFF
     };
 
-    private static final int EDITOR_SIDE_DP = 48;
-    private static final int EDITOR_TOP_DP = 48;
-    private static final int EDITOR_BOTTOM_DP = 50;
-    private static final int TEXT_EDITOR_BOTTOM_DP = 92;
+    private static final int EDITOR_SIDE_DP = 24;
+    private static final int EDITOR_TOP_DP = 0;
+    private static final int EDITOR_BOTTOM_DP = 30;
+    private static final int TEXT_EDITOR_BOTTOM_DP = 30;
+    private static final int CONTROLLER_SIZE_DP = 54;
+    private static final int CONTROLLER_MENU_WIDTH_DP = 170;
 
     private WindowManager wm;
     private OverlayRepository repo;
@@ -79,10 +79,13 @@ public class OverlayService extends Service {
     private final Map<String, EditText> textEditors = new HashMap<>();
     private final Map<String, ImageView> imageViews = new HashMap<>();
     private final Map<String, WebView> webViews = new HashMap<>();
-    // Independent touch surface used ONLY for locked Text outside the controller.
-    // Image/GIF and Overlay Link remain fully NOT_TOUCHABLE with no unlock hotspot.
-    private final Map<String, View> externalUnlockHotspots = new HashMap<>();
-    private final Map<String, WindowManager.LayoutParams> externalUnlockHotspotParams = new HashMap<>();
+
+    private FrameLayout globalControllerRoot;
+    private ImageView globalControllerAvatar;
+    private ScrollView globalControllerMenu;
+    private LinearLayout globalControllerMenuList;
+    private WindowManager.LayoutParams globalControllerParams;
+    private boolean globalControllerExpanded;
 
     @Override public void onCreate() {
         super.onCreate();
@@ -99,42 +102,57 @@ public class OverlayService extends Service {
                     CHANNEL_ID,
                     "Overlay Engine",
                     NotificationManager.IMPORTANCE_LOW);
-            channel.setDescription("Keeps livestream overlays visible over other apps.");
+            channel.setDescription("Kontrol cepat overlay livestream.");
             nm.createNotificationChannel(channel);
         }
-
-        Intent open = new Intent(this, MainActivity.class);
-        PendingIntent pi = PendingIntent.getActivity(
-                this, 0, open,
-                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-
-        Intent unlockAll = new Intent(this, OverlayService.class);
-        unlockAll.setAction(ACTION_UNLOCK_ALL);
-        PendingIntent unlockAllPi = PendingIntent.getService(
-                this, 91, unlockAll,
-                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-
-        Notification notification = new Notification.Builder(this, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_launcher)
-                .setContentTitle("Stream Overlay aktif")
-                .setContentText("Overlay berjalan di atas aplikasi lain")
-                .setOngoing(true)
-                .setContentIntent(pi)
-                .addAction(R.drawable.ic_launcher, "Unlock semua", unlockAllPi)
-                .build();
-
+        boolean visible = repo.prefs().getBoolean("overlay_visible", true);
+        Notification notification = buildForegroundNotification(visible);
         if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(
-                    NOTIFICATION_ID,
-                    notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
         } else {
             startForeground(NOTIFICATION_ID, notification);
         }
     }
 
+    private Notification buildForegroundNotification(boolean visible) {
+        Intent open = new Intent(this, MainActivity.class);
+        PendingIntent openPi = PendingIntent.getActivity(
+                this, 0, open,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+
+        Intent toggle = new Intent(this, OverlayService.class);
+        toggle.setAction(ACTION_TOGGLE_GLOBAL);
+        PendingIntent togglePi = PendingIntent.getService(
+                this, 92, toggle,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+
+        return new Notification.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_launcher)
+                .setContentTitle(visible ? "Stream Overlay aktif" : "Stream Overlay nonaktif")
+                .setContentText(visible
+                        ? "Overlay tampil. Tap Overlay OFF untuk sembunyikan semua."
+                        : "Overlay disembunyikan. Tap Overlay ON untuk tampilkan lagi.")
+                .setOngoing(true)
+                .setContentIntent(openPi)
+                .addAction(R.drawable.ic_launcher, visible ? "Overlay OFF" : "Overlay ON", togglePi)
+                .build();
+    }
+
+    private void updateForegroundNotification(boolean visible) {
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm != null) nm.notify(NOTIFICATION_ID, buildForegroundNotification(visible));
+    }
+
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
+
+        if (ACTION_TOGGLE_GLOBAL.equals(action)) {
+            boolean visible = !repo.prefs().getBoolean("overlay_visible", true);
+            repo.prefs().edit().putBoolean("overlay_visible", visible).apply();
+            renderAll();
+            updateForegroundNotification(visible);
+            return START_STICKY;
+        }
 
         if (ACTION_CONTROLLER_VISIBILITY.equals(action)) {
             controllerVisible = intent.getBooleanExtra("visible", false);
@@ -146,8 +164,8 @@ public class OverlayService extends Service {
                 return START_STICKY;
             }
 
-            if (roots.isEmpty()) renderAll();
-            else applyControllerModeToAll();
+            // Rebuild once so the floating controller appears only outside this app.
+            renderAll();
             return START_STICKY;
         }
 
@@ -158,11 +176,16 @@ public class OverlayService extends Service {
             return START_NOT_STICKY;
         }
 
+        if (!repo.prefs().getBoolean("overlay_visible", true)) {
+            // Content overlays stay hidden, but the floating controller remains available.
+            renderAll();
+            updateForegroundNotification(false);
+            return START_STICKY;
+        }
+
         controllerVisible = repo.prefs().getBoolean("controller_visible", false);
 
-        if (ACTION_UNLOCK_ALL.equals(action)) {
-            unlockAllRuntime();
-        } else if (ACTION_SET_LOCK.equals(action)) {
+        if (ACTION_SET_LOCK.equals(action)) {
             String id = intent.getStringExtra("id");
             boolean locked = intent.getBooleanExtra("locked", false);
             setLockedRuntime(id, locked);
@@ -183,10 +206,14 @@ public class OverlayService extends Service {
 
     private void renderAll() {
         removeAll();
-        for (OverlayItem item : repo.getAll()) {
-            if (!item.enabled) continue;
-            addOverlay(item);
+        boolean visible = repo.prefs().getBoolean("overlay_visible", true);
+        if (visible) {
+            for (OverlayItem item : repo.getAll()) {
+                if (!item.enabled) continue;
+                addOverlay(item);
+            }
         }
+        showGlobalControllerIfNeeded();
     }
 
     private void addOverlay(OverlayItem item) {
@@ -217,6 +244,7 @@ public class OverlayService extends Service {
         unlockSurface.setClickable(true);
         unlockSurface.setLongClickable(true);
         unlockSurface.setVisibility(View.GONE);
+        unlockSurface.setOnClickListener(v -> setLockedRuntime(item.id, false));
         unlockSurface.setOnLongClickListener(v -> {
             setLockedRuntime(item.id, false);
             return true;
@@ -233,7 +261,7 @@ public class OverlayService extends Service {
         root.addView(contentHost, contentLp);
 
         List<View> chrome = new ArrayList<>();
-        addEditorChrome(root, item, chrome);
+        addEditorChrome(root, contentHost, item, chrome);
 
         TextView lockedHint = new TextView(this);
         lockedHint.setText("Tahan untuk unlock");
@@ -344,6 +372,12 @@ public class OverlayService extends Service {
         settings.setAllowContentAccess(false);
         settings.setSupportMultipleWindows(false);
         settings.setJavaScriptCanOpenWindowsAutomatically(false);
+        settings.setUseWideViewPort(false);
+        settings.setLoadWithOverviewMode(false);
+        settings.setBuiltInZoomControls(false);
+        settings.setDisplayZoomControls(false);
+        settings.setTextZoom(100);
+        web.setInitialScale(100);
         if (Build.VERSION.SDK_INT >= 21) {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         }
@@ -386,6 +420,9 @@ public class OverlayService extends Service {
         if (web == null) return;
         String js = "(function(){"
                 + "try{"
+                + "var m=document.querySelector('meta[name=viewport]');"
+                + "if(!m){m=document.createElement('meta');m.name='viewport';(document.head||document.documentElement).appendChild(m);}"
+                + "m.content='width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no';"
                 + "document.documentElement.style.setProperty('background','transparent','important');"
                 + "if(document.body){document.body.style.setProperty('background','transparent','important');"
                 + "document.body.style.setProperty('background-color','transparent','important');}"
@@ -445,81 +482,38 @@ public class OverlayService extends Service {
         return 1.0f;
     }
 
-    private void addEditorChrome(FrameLayout root, OverlayItem item, List<View> chrome) {
-        // MOVE is intentionally separate from resize handles so dragging never
-        // accidentally changes the overlay size.
+    private void addEditorChrome(FrameLayout root, FrameLayout contentHost,
+                                 OverlayItem item, List<View> chrome) {
         TextView drag = chip("✥ MOVE");
         drag.setTextSize(12);
         FrameLayout.LayoutParams dragLp = new FrameLayout.LayoutParams(
-                Ui.dp(this, 72), Ui.dp(this, 24), Gravity.TOP | Gravity.CENTER_HORIZONTAL);
-        dragLp.topMargin = 0;
-        root.addView(drag, dragLp);
+                Ui.dp(this, 78), Ui.dp(this, 32), Gravity.CENTER);
+        contentHost.addView(drag, dragLp);
         chrome.add(drag);
         installDrag(drag, root, item.id);
 
         TextView lock = chip("🔒");
         FrameLayout.LayoutParams lockLp = new FrameLayout.LayoutParams(
-                Ui.dp(this, 40), Ui.dp(this, 24), Gravity.TOP | Gravity.END);
-        lockLp.rightMargin = Ui.dp(this, 2);
-        lockLp.topMargin = 0;
-        root.addView(lock, lockLp);
+                Ui.dp(this, 44), Ui.dp(this, 36), Gravity.TOP | Gravity.END);
+        lockLp.rightMargin = Ui.dp(this, 6);
+        lockLp.topMargin = Ui.dp(this, 6);
+        contentHost.addView(lock, lockLp);
         chrome.add(lock);
         lock.setOnClickListener(v -> setLockedRuntime(item.id, true));
 
-        // Full frame resizing: all four sides + all four corners.
-        // Image/GIF corners preserve the media aspect ratio. Side handles adjust
-        // the frame freely, which is useful when a source has transparent space.
-        addResizeHandle(root, item, chrome, "↖", Gravity.TOP | Gravity.START,
-                Ui.dp(this, 26), Ui.dp(this, 26), false, false,
-                true, true, false, false, OverlayItem.TYPE_IMAGE.equals(item.type));
-        addResizeHandle(root, item, chrome, "↗", Gravity.TOP | Gravity.END,
-                Ui.dp(this, 26), Ui.dp(this, 26), true, false,
-                false, true, true, false, OverlayItem.TYPE_IMAGE.equals(item.type));
-        addResizeHandle(root, item, chrome, "↙", Gravity.BOTTOM | Gravity.START,
-                Ui.dp(this, 26), editorBottomPx(item) - Ui.dp(this, 22), false, true,
-                true, false, false, true, OverlayItem.TYPE_IMAGE.equals(item.type));
-        addResizeHandle(root, item, chrome, "↘", Gravity.BOTTOM | Gravity.END,
-                Ui.dp(this, 26), editorBottomPx(item) - Ui.dp(this, 22), true, true,
-                false, false, true, true, OverlayItem.TYPE_IMAGE.equals(item.type));
-
-        // Edge handles. Margins keep them outside the content box.
-        TextView topResize = resizeChip("↕");
-        FrameLayout.LayoutParams topLp = new FrameLayout.LayoutParams(
-                Ui.dp(this, 28), Ui.dp(this, 22), Gravity.TOP | Gravity.CENTER_HORIZONTAL);
-        topLp.topMargin = editorTopPx() - Ui.dp(this, 22);
-        root.addView(topResize, topLp);
-        chrome.add(topResize);
-        installFrameResize(topResize, root, item.id, false, true, false, false, false);
-
-        TextView bottomResize = resizeChip("↕");
-        FrameLayout.LayoutParams bottomLp = new FrameLayout.LayoutParams(
-                Ui.dp(this, 28), Ui.dp(this, 22), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-        bottomLp.bottomMargin = Math.max(0, editorBottomPx(item) - Ui.dp(this, 22));
-        root.addView(bottomResize, bottomLp);
-        chrome.add(bottomResize);
-        installFrameResize(bottomResize, root, item.id, false, false, false, true, false);
-
-        TextView leftResize = resizeChip("↔");
-        FrameLayout.LayoutParams leftLp = new FrameLayout.LayoutParams(
-                Ui.dp(this, 22), Ui.dp(this, 34), Gravity.START | Gravity.CENTER_VERTICAL);
-        leftLp.leftMargin = editorSidePx() - Ui.dp(this, 22);
-        root.addView(leftResize, leftLp);
-        chrome.add(leftResize);
-        installFrameResize(leftResize, root, item.id, true, false, false, false, false);
-
-        TextView rightResize = resizeChip("↔");
-        FrameLayout.LayoutParams rightLp = new FrameLayout.LayoutParams(
-                Ui.dp(this, 22), Ui.dp(this, 34), Gravity.END | Gravity.CENTER_VERTICAL);
-        rightLp.rightMargin = editorSidePx() - Ui.dp(this, 22);
-        root.addView(rightResize, rightLp);
-        chrome.add(rightResize);
-        installFrameResize(rightResize, root, item.id, false, false, true, false, false);
+        TextView resize = resizeChip("↘");
+        resize.setTextSize(18);
+        FrameLayout.LayoutParams resizeLp = new FrameLayout.LayoutParams(
+                Ui.dp(this, 34), Ui.dp(this, 34), Gravity.BOTTOM | Gravity.END);
+        root.addView(resize, resizeLp);
+        chrome.add(resize);
+        installResize(resize, root, item.id, OverlayItem.TYPE_IMAGE.equals(item.type));
 
         if (OverlayItem.TYPE_TEXT.equals(item.type)) {
             LinearLayout styleTools = new LinearLayout(this);
             styleTools.setOrientation(LinearLayout.HORIZONTAL);
             styleTools.setGravity(Gravity.CENTER_VERTICAL);
-            styleTools.setPadding(Ui.dp(this, 3), Ui.dp(this, 1), Ui.dp(this, 3), Ui.dp(this, 1));
+            styleTools.setPadding(Ui.dp(this, 2), Ui.dp(this, 1), Ui.dp(this, 2), Ui.dp(this, 1));
             styleTools.setBackground(rounded(0xCC17191F, 8));
 
             TextView smaller = miniChip("A−");
@@ -535,16 +529,15 @@ public class OverlayService extends Service {
 
             FrameLayout.LayoutParams styleLp = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Ui.dp(this, 36), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-            // First 24dp below the content is reserved for resize handles.
-            styleLp.bottomMargin = Ui.dp(this, 28);
-            root.addView(styleTools, styleLp);
+                    Ui.dp(this, 34), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+            styleLp.bottomMargin = Ui.dp(this, 4);
+            contentHost.addView(styleTools, styleLp);
             chrome.add(styleTools);
 
             LinearLayout alignTools = new LinearLayout(this);
             alignTools.setOrientation(LinearLayout.HORIZONTAL);
             alignTools.setGravity(Gravity.CENTER_VERTICAL);
-            alignTools.setPadding(Ui.dp(this, 3), Ui.dp(this, 1), Ui.dp(this, 3), Ui.dp(this, 1));
+            alignTools.setPadding(Ui.dp(this, 2), Ui.dp(this, 1), Ui.dp(this, 2), Ui.dp(this, 1));
             alignTools.setBackground(rounded(0xCC17191F, 8));
 
             TextView left = miniChip("⇤");
@@ -562,9 +555,9 @@ public class OverlayService extends Service {
 
             FrameLayout.LayoutParams alignLp = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Ui.dp(this, 36), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-            alignLp.bottomMargin = 0;
-            root.addView(alignTools, alignLp);
+                    Ui.dp(this, 34), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+            alignLp.bottomMargin = Ui.dp(this, 40);
+            contentHost.addView(alignTools, alignLp);
             chrome.add(alignTools);
 
             smaller.setOnClickListener(v -> changeTextSize(item.id, -2f));
@@ -582,15 +575,15 @@ public class OverlayService extends Service {
             TextView placeholder = new TextView(this);
             placeholder.setText("Overlay Link");
             placeholder.setTextColor(Color.WHITE);
-            placeholder.setTextSize(12);
+            placeholder.setTextSize(11);
             placeholder.setGravity(Gravity.CENTER);
             placeholder.setBackground(rounded(0x8817191F, 8));
             FrameLayout.LayoutParams p = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Ui.dp(this, 24), Gravity.TOP | Gravity.START);
-            p.leftMargin = editorSidePx() + Ui.dp(this, 6);
-            p.topMargin = Ui.dp(this, 2);
-            root.addView(placeholder, p);
+                    Ui.dp(this, 26), Gravity.TOP | Gravity.START);
+            p.leftMargin = Ui.dp(this, 6);
+            p.topMargin = Ui.dp(this, 6);
+            contentHost.addView(placeholder, p);
             chrome.add(placeholder);
         }
     }
@@ -820,10 +813,329 @@ public class OverlayService extends Service {
         });
     }
 
+    private void showGlobalControllerIfNeeded() {
+        if (controllerVisible
+                || !repo.prefs().getBoolean("engine_enabled", false)
+                || !Settings.canDrawOverlays(this)) {
+            removeGlobalController();
+            return;
+        }
+        if (globalControllerRoot != null) return;
+
+        final int size = Ui.dp(this, CONTROLLER_SIZE_DP);
+        final int menuWidth = Ui.dp(this, 248);
+        final int gap = Ui.dp(this, 6);
+        final int screenW = getResources().getDisplayMetrics().widthPixels;
+        final int screenH = getResources().getDisplayMetrics().heightPixels;
+
+        FrameLayout root = new FrameLayout(this);
+        root.setClipChildren(false);
+        root.setClipToPadding(false);
+        root.setBackgroundColor(Color.TRANSPARENT);
+
+        ImageView avatar = new ImageView(this);
+        avatar.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        GradientDrawable avatarBg = new GradientDrawable();
+        avatarBg.setShape(GradientDrawable.OVAL);
+        avatarBg.setColor(0xFF20232A);
+        avatarBg.setStroke(Ui.dp(this, 2), 0xFF7CFFB2);
+        avatar.setBackground(avatarBg);
+        avatar.setClipToOutline(true);
+        avatar.setImageResource(R.drawable.ic_launcher);
+        loadControllerAvatar(avatar);
+
+        FrameLayout.LayoutParams avatarLp = new FrameLayout.LayoutParams(size, size);
+        root.addView(avatar, avatarLp);
+
+        ScrollView menu = new ScrollView(this);
+        menu.setFillViewport(true);
+        menu.setBackground(rounded(0xEE17191F, 18));
+        menu.setVisibility(View.GONE);
+
+        LinearLayout menuList = new LinearLayout(this);
+        menuList.setOrientation(LinearLayout.VERTICAL);
+        menuList.setPadding(Ui.dp(this, 8), Ui.dp(this, 8), Ui.dp(this, 8), Ui.dp(this, 8));
+        menu.addView(menuList, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+
+        List<OverlayItem> installed = repo.getAll();
+        if (installed.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("Belum ada overlay");
+            empty.setTextSize(12);
+            empty.setTextColor(0xFFB8BDC7);
+            empty.setGravity(Gravity.CENTER);
+            menuList.addView(empty, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this, 44)));
+        } else {
+            for (OverlayItem item : installed) {
+                menuList.addView(controllerOverlayRow(item), new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this, 52)));
+            }
+        }
+
+        int rowCount = Math.max(1, installed.size());
+        int desiredMenuHeight = Ui.dp(this, 16 + rowCount * 52);
+        int menuHeight = Math.min(Math.max(size, desiredMenuHeight), Math.max(size, screenH - Ui.dp(this, 40)));
+
+        FrameLayout.LayoutParams menuLp = new FrameLayout.LayoutParams(menuWidth, menuHeight);
+        menuLp.leftMargin = size + gap;
+        root.addView(menu, menuLp);
+
+        int savedX = repo.prefs().getInt("controller_bubble_x", Math.max(0, screenW - size - Ui.dp(this, 12)));
+        int savedY = repo.prefs().getInt("controller_bubble_y", Ui.dp(this, 120));
+        savedX = clamp(savedX, 0, Math.max(0, screenW - size));
+        savedY = clamp(savedY, 0, Math.max(0, screenH - size));
+
+        WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                size,
+                size,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT);
+        lp.gravity = Gravity.TOP | Gravity.START;
+        lp.x = savedX;
+        lp.y = savedY;
+
+        try {
+            wm.addView(root, lp);
+        } catch (Exception ignored) {
+            return;
+        }
+
+        globalControllerRoot = root;
+        globalControllerAvatar = avatar;
+        globalControllerMenu = menu;
+        globalControllerMenuList = menuList;
+        globalControllerParams = lp;
+        globalControllerExpanded = false;
+
+        final float[] downX = new float[1];
+        final float[] downY = new float[1];
+        final int[] startX = new int[1];
+        final int[] startY = new int[1];
+        final boolean[] moved = new boolean[1];
+
+        avatar.setOnTouchListener((v, event) -> {
+            if (globalControllerParams == null) return true;
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    downX[0] = event.getRawX();
+                    downY[0] = event.getRawY();
+                    startX[0] = collapsedControllerX();
+                    startY[0] = collapsedControllerY();
+                    moved[0] = false;
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    int dx = Math.round(event.getRawX() - downX[0]);
+                    int dy = Math.round(event.getRawY() - downY[0]);
+                    if (!moved[0] && (Math.abs(dx) > Ui.dp(this, 6) || Math.abs(dy) > Ui.dp(this, 6))) {
+                        moved[0] = true;
+                        if (globalControllerExpanded) setControllerExpanded(false);
+                    }
+                    if (moved[0]) {
+                        int maxX = Math.max(0, screenW - size);
+                        int maxY = Math.max(0, screenH - size);
+                        globalControllerParams.x = clamp(startX[0] + dx, 0, maxX);
+                        globalControllerParams.y = clamp(startY[0] + dy, 0, maxY);
+                        try { wm.updateViewLayout(globalControllerRoot, globalControllerParams); } catch (Exception ignored) {}
+                    }
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    if (moved[0]) {
+                        repo.prefs().edit()
+                                .putInt("controller_bubble_x", globalControllerParams.x)
+                                .putInt("controller_bubble_y", globalControllerParams.y)
+                                .apply();
+                    } else if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+                        setControllerExpanded(!globalControllerExpanded);
+                    }
+                    return true;
+            }
+            return true;
+        });
+    }
+
+    private View controllerOverlayRow(OverlayItem item) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(Ui.dp(this, 4), Ui.dp(this, 3), Ui.dp(this, 4), Ui.dp(this, 3));
+
+        String type = OverlayItem.TYPE_TEXT.equals(item.type) ? "T"
+                : OverlayItem.TYPE_IMAGE.equals(item.type) ? "IMG" : "LINK";
+        TextView title = new TextView(this);
+        title.setText((item.title == null || item.title.trim().isEmpty() ? "Overlay" : item.title) + " · " + type);
+        title.setTextSize(11);
+        title.setTextColor(Color.WHITE);
+        title.setSingleLine(true);
+        row.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f));
+
+        TextView lock = controllerChip(item.locked ? "UNLOCK" : "LOCK");
+        LinearLayout.LayoutParams lockLp = new LinearLayout.LayoutParams(Ui.dp(this, 68), Ui.dp(this, 38));
+        lockLp.leftMargin = Ui.dp(this, 4);
+        row.addView(lock, lockLp);
+
+        TextView power = controllerChip(item.enabled ? "OFF" : "ON");
+        LinearLayout.LayoutParams powerLp = new LinearLayout.LayoutParams(Ui.dp(this, 46), Ui.dp(this, 38));
+        powerLp.leftMargin = Ui.dp(this, 4);
+        row.addView(power, powerLp);
+
+        lock.setOnClickListener(v -> {
+            OverlayItem current = repo.get(item.id);
+            if (current == null) return;
+            boolean newLocked = !current.locked;
+            if (current.enabled && roots.containsKey(current.id)) {
+                setLockedRuntime(current.id, newLocked);
+            } else {
+                current.locked = newLocked;
+                repo.upsert(current);
+            }
+            lock.setText(newLocked ? "UNLOCK" : "LOCK");
+        });
+
+        power.setOnClickListener(v -> {
+            OverlayItem current = repo.get(item.id);
+            if (current == null) return;
+            current.enabled = !current.enabled;
+            repo.upsert(current);
+            power.setText(current.enabled ? "OFF" : "ON");
+            if (current.enabled) {
+                if (repo.prefs().getBoolean("overlay_visible", true) && !roots.containsKey(current.id)) {
+                    addOverlay(current);
+                }
+            } else {
+                removeOverlayWindow(current.id);
+            }
+        });
+
+        return row;
+    }
+
+    private TextView controllerChip(String label) {
+        TextView v = new TextView(this);
+        v.setText(label);
+        v.setTextSize(10);
+        v.setTextColor(Color.WHITE);
+        v.setGravity(Gravity.CENTER);
+        v.setBackground(rounded(0xFF2B2E36, 12));
+        v.setClickable(true);
+        return v;
+    }
+
+    private void loadControllerAvatar(ImageView avatar) {
+        String raw = repo.prefs().getString("controller_avatar_uri", "");
+        if (raw == null || raw.trim().isEmpty()) return;
+        try {
+            Uri uri = Uri.parse(raw);
+            if (Build.VERSION.SDK_INT >= 28) {
+                Drawable d = ImageDecoder.decodeDrawable(
+                        ImageDecoder.createSource(getContentResolver(), uri),
+                        (decoder, info, source) -> {
+                            int w = info.getSize().getWidth();
+                            int h = info.getSize().getHeight();
+                            int max = Math.max(w, h);
+                            if (max > 256) {
+                                float scale = 256f / max;
+                                decoder.setTargetSize(Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale)));
+                            }
+                        });
+                avatar.setImageDrawable(d);
+                if (d instanceof AnimatedImageDrawable) ((AnimatedImageDrawable) d).start();
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private void setControllerExpanded(boolean expanded) {
+        if (globalControllerRoot == null || globalControllerParams == null || globalControllerMenu == null) return;
+        int size = Ui.dp(this, CONTROLLER_SIZE_DP);
+        int gap = Ui.dp(this, 6);
+        int screenW = getResources().getDisplayMetrics().widthPixels;
+        int screenH = getResources().getDisplayMetrics().heightPixels;
+
+        if (expanded) {
+            int avatarX = collapsedControllerX();
+            int avatarY = collapsedControllerY();
+            FrameLayout.LayoutParams avatarLp = (FrameLayout.LayoutParams) globalControllerAvatar.getLayoutParams();
+            FrameLayout.LayoutParams menuLp = (FrameLayout.LayoutParams) globalControllerMenu.getLayoutParams();
+            int menuWidth = menuLp.width;
+            int menuHeight = menuLp.height;
+            int total = size + gap + menuWidth;
+            boolean openLeft = avatarX > screenW / 2;
+
+            int rootY = clamp(avatarY, 0, Math.max(0, screenH - menuHeight));
+            globalControllerParams.y = rootY;
+            avatarLp.topMargin = avatarY - rootY;
+            menuLp.topMargin = 0;
+
+            if (openLeft) {
+                int rootX = Math.max(0, avatarX - menuWidth - gap);
+                globalControllerParams.x = rootX;
+                avatarLp.leftMargin = menuWidth + gap;
+                menuLp.leftMargin = 0;
+            } else {
+                globalControllerParams.x = avatarX;
+                avatarLp.leftMargin = 0;
+                menuLp.leftMargin = size + gap;
+            }
+            globalControllerAvatar.setLayoutParams(avatarLp);
+            globalControllerMenu.setLayoutParams(menuLp);
+            globalControllerParams.width = total;
+            globalControllerParams.height = Math.max(size + avatarLp.topMargin, menuHeight);
+            globalControllerMenu.setVisibility(View.VISIBLE);
+        } else {
+            int avatarScreenX = collapsedControllerX();
+            int avatarScreenY = collapsedControllerY();
+            FrameLayout.LayoutParams avatarLp = (FrameLayout.LayoutParams) globalControllerAvatar.getLayoutParams();
+            avatarLp.leftMargin = 0;
+            avatarLp.topMargin = 0;
+            globalControllerAvatar.setLayoutParams(avatarLp);
+            globalControllerMenu.setVisibility(View.GONE);
+            globalControllerParams.x = avatarScreenX;
+            globalControllerParams.y = avatarScreenY;
+            globalControllerParams.width = size;
+            globalControllerParams.height = size;
+        }
+        globalControllerExpanded = expanded;
+        try { wm.updateViewLayout(globalControllerRoot, globalControllerParams); } catch (Exception ignored) {}
+    }
+
+    private int collapsedControllerX() {
+        if (globalControllerParams == null || globalControllerAvatar == null) return 0;
+        FrameLayout.LayoutParams avatarLp = (FrameLayout.LayoutParams) globalControllerAvatar.getLayoutParams();
+        return globalControllerParams.x + avatarLp.leftMargin;
+    }
+
+    private int collapsedControllerY() {
+        if (globalControllerParams == null || globalControllerAvatar == null) return 0;
+        FrameLayout.LayoutParams avatarLp = (FrameLayout.LayoutParams) globalControllerAvatar.getLayoutParams();
+        return globalControllerParams.y + avatarLp.topMargin;
+    }
+
+    private void removeGlobalController() {
+        if (globalControllerAvatar != null) {
+            Drawable d = globalControllerAvatar.getDrawable();
+            if (d instanceof AnimatedImageDrawable) ((AnimatedImageDrawable) d).stop();
+        }
+        if (globalControllerRoot != null) {
+            try { wm.removeViewImmediate(globalControllerRoot); } catch (Exception ignored) {}
+        }
+        globalControllerRoot = null;
+        globalControllerAvatar = null;
+        globalControllerMenu = null;
+        globalControllerMenuList = null;
+        globalControllerParams = null;
+        globalControllerExpanded = false;
+    }
+
     private void applyControllerModeToAll() {
         for (Map.Entry<String, OverlayItem> e : itemCache.entrySet()) {
             applyEditorState(e.getKey(), e.getValue().locked);
         }
+        showGlobalControllerIfNeeded();
     }
 
     private void applyTextGravity(EditText edit, OverlayItem item) {
@@ -1188,9 +1500,9 @@ public class OverlayService extends Service {
 
         View unlockSurface = unlockSurfaces.get(id);
         TextView lockedHint = lockedHints.get(id);
-        boolean longPressUnlock = locked && controllerVisible;
-        if (unlockSurface != null) unlockSurface.setVisibility(longPressUnlock ? View.VISIBLE : View.GONE);
-        if (lockedHint != null) lockedHint.setVisibility(longPressUnlock ? View.VISIBLE : View.GONE);
+        boolean controllerUnlock = locked && controllerVisible;
+        if (unlockSurface != null) unlockSurface.setVisibility(controllerUnlock ? View.VISIBLE : View.GONE);
+        if (lockedHint != null) lockedHint.setVisibility(View.GONE);
 
         if (contentHost != null) {
             if (!locked) contentHost.setForeground(editorBorder());
@@ -1219,183 +1531,39 @@ public class OverlayService extends Service {
 
         try { wm.updateViewLayout(root, lp); } catch (Exception ignored) {}
 
-        // Outside the controller app, only Text gets a gesture surface:
-        // two fingers held for 1.5 s on the text rectangle unlock that layer.
-        // Image/GIF and Overlay Link stay fully click-through and are unlocked
-        // globally from the foreground notification.
-        if (locked && !controllerVisible && OverlayItem.TYPE_TEXT.equals(item.type)) {
-            showExternalUnlockHotspot(id);
-        } else {
-            removeExternalUnlockHotspot(id);
-        }
+        // Outside the controller app, locked overlays have ZERO touch surfaces.
+        // No hidden gesture or hotspot is created, so gameplay touch is untouched.
     }
 
-    private void showExternalUnlockHotspot(String id) {
-        WindowManager.LayoutParams overlayLp = params.get(id);
-        OverlayItem item = itemCache.get(id);
-        if (overlayLp == null || item == null || !item.locked || controllerVisible
-                || !OverlayItem.TYPE_TEXT.equals(item.type)) {
-            removeExternalUnlockHotspot(id);
-            return;
+    private void removeOverlayWindow(String id) {
+        if (id == null) return;
+        ImageView image = imageViews.remove(id);
+        if (image != null) {
+            Drawable d = image.getDrawable();
+            if (d instanceof AnimatedImageDrawable) ((AnimatedImageDrawable) d).stop();
         }
-
-        WindowManager.LayoutParams hp = externalUnlockHotspotParams.get(id);
-        View hotspot = externalUnlockHotspots.get(id);
-
-        if (hotspot == null) {
-            // Nearly invisible, but not a zero-alpha window: some OEMs are unreliable
-            // with fully transparent application-overlay touch surfaces. There is no
-            // icon or hint outside the app.
-            View touchSurface = new View(this);
-            touchSurface.setBackgroundColor(0x01000000);
-            touchSurface.setClickable(true);
-
-            final String overlayId = id;
-            final Handler holdHandler = new Handler(Looper.getMainLooper());
-            final float moveTolerance = Ui.dp(this, 24);
-            final float[] start = new float[4];
-            final int[] pointerCount = new int[]{0};
-            final boolean[] armed = new boolean[]{false};
-            final boolean[] fired = new boolean[]{false};
-
-            final Runnable unlockRunnable = () -> {
-                if (!armed[0] || fired[0] || pointerCount[0] < 2) return;
-                fired[0] = true;
-                touchSurface.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
-                setLockedRuntime(overlayId, false);
-            };
-
-            touchSurface.setOnTouchListener((v, event) -> {
-                pointerCount[0] = event.getPointerCount();
-                switch (event.getActionMasked()) {
-                    case MotionEvent.ACTION_DOWN:
-                        armed[0] = false;
-                        fired[0] = false;
-                        holdHandler.removeCallbacks(unlockRunnable);
-                        return true;
-
-                    case MotionEvent.ACTION_POINTER_DOWN:
-                        if (event.getPointerCount() >= 2) {
-                            armed[0] = true;
-                            fired[0] = false;
-                            start[0] = event.getX(0);
-                            start[1] = event.getY(0);
-                            start[2] = event.getX(1);
-                            start[3] = event.getY(1);
-                            holdHandler.removeCallbacks(unlockRunnable);
-                            holdHandler.postDelayed(unlockRunnable, 1500);
-                        }
-                        return true;
-
-                    case MotionEvent.ACTION_MOVE:
-                        if (armed[0]) {
-                            if (event.getPointerCount() < 2
-                                    || Math.abs(event.getX(0) - start[0]) > moveTolerance
-                                    || Math.abs(event.getY(0) - start[1]) > moveTolerance
-                                    || Math.abs(event.getX(1) - start[2]) > moveTolerance
-                                    || Math.abs(event.getY(1) - start[3]) > moveTolerance) {
-                                armed[0] = false;
-                                holdHandler.removeCallbacks(unlockRunnable);
-                            }
-                        }
-                        return true;
-
-                    case MotionEvent.ACTION_POINTER_UP:
-                    case MotionEvent.ACTION_UP:
-                    case MotionEvent.ACTION_CANCEL:
-                        armed[0] = false;
-                        holdHandler.removeCallbacks(unlockRunnable);
-                        return true;
-
-                    default:
-                        return true;
-                }
-            });
-
-            hotspot = touchSurface;
-            int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                    | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                    | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
-            hp = new WindowManager.LayoutParams(
-                    contentWidthPx(overlayLp),
-                    contentHeightPx(overlayLp, item),
-                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                    flags,
-                    PixelFormat.TRANSLUCENT);
-            hp.gravity = Gravity.TOP | Gravity.START;
-            hp.alpha = 1.0f;
-
-            externalUnlockHotspots.put(id, hotspot);
-            externalUnlockHotspotParams.put(id, hp);
-            positionExternalUnlockHotspot(id);
-            try {
-                wm.addView(hotspot, hp);
-            } catch (Exception e) {
-                externalUnlockHotspots.remove(id);
-                externalUnlockHotspotParams.remove(id);
-            }
-        } else {
-            hp.width = contentWidthPx(overlayLp);
-            hp.height = contentHeightPx(overlayLp, item);
-            positionExternalUnlockHotspot(id);
-            try { wm.updateViewLayout(hotspot, hp); } catch (Exception ignored) {}
+        WebView web = webViews.remove(id);
+        if (web != null) {
+            try { web.stopLoading(); web.loadUrl("about:blank"); } catch (Exception ignored) {}
         }
-    }
-
-    private void positionExternalUnlockHotspot(String id) {
-        WindowManager.LayoutParams overlayLp = params.get(id);
-        WindowManager.LayoutParams hp = externalUnlockHotspotParams.get(id);
-        OverlayItem item = itemCache.get(id);
-        if (overlayLp == null || hp == null || item == null) return;
-        // Cover exactly the Text CONTENT rectangle, not editor chrome.
-        hp.x = overlayLp.x + editorSidePx();
-        hp.y = overlayLp.y + editorTopPx();
-        hp.width = contentWidthPx(overlayLp);
-        hp.height = contentHeightPx(overlayLp, item);
-    }
-
-    private void unlockAllRuntime() {
-        List<OverlayItem> all = repo.getAll();
-        for (OverlayItem item : all) {
-            if (item.locked) {
-                item.locked = false;
-                repo.upsert(item);
-            }
+        FrameLayout root = roots.remove(id);
+        if (root != null) {
+            try { wm.removeViewImmediate(root); } catch (Exception ignored) {}
         }
-
-        if (roots.isEmpty()) {
-            renderAll();
-            return;
+        if (web != null) {
+            try { web.destroy(); } catch (Exception ignored) {}
         }
-
-        for (String id : new ArrayList<>(itemCache.keySet())) {
-            OverlayItem item = itemCache.get(id);
-            if (item == null) continue;
-            item.locked = false;
-            itemCache.put(id, item);
-            applyEditorState(id, false);
-        }
-    }
-
-    private void removeExternalUnlockHotspot(String id) {
-        View hotspot = externalUnlockHotspots.remove(id);
-        externalUnlockHotspotParams.remove(id);
-        if (hotspot != null) {
-            try { wm.removeViewImmediate(hotspot); } catch (Exception ignored) {}
-        }
-    }
-
-    private void removeAllExternalUnlockHotspots() {
-        for (View hotspot : new ArrayList<>(externalUnlockHotspots.values())) {
-            try { wm.removeViewImmediate(hotspot); } catch (Exception ignored) {}
-        }
-        externalUnlockHotspots.clear();
-        externalUnlockHotspotParams.clear();
+        contentHosts.remove(id);
+        unlockSurfaces.remove(id);
+        lockedHints.remove(id);
+        params.remove(id);
+        itemCache.remove(id);
+        editorChrome.remove(id);
+        textEditors.remove(id);
     }
 
     private void removeAll() {
-        removeAllExternalUnlockHotspots();
+        removeGlobalController();
         for (Map.Entry<String, FrameLayout> entry : roots.entrySet()) {
             String id = entry.getKey();
             ImageView image = imageViews.get(id);

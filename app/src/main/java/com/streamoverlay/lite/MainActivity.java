@@ -30,6 +30,7 @@ public class MainActivity extends Activity {
     private static final int REQ_IMAGE = 7001;
     private static final int REQ_REPLACE_IMAGE = 7002;
     private static final int REQ_NOTIFICATIONS = 7003;
+    private static final int REQ_CONTROLLER_AVATAR = 7004;
 
     private OverlayRepository repo;
     private LinearLayout listBox;
@@ -101,6 +102,19 @@ public class MainActivity extends Activity {
         engineRow.addView(engineSwitch);
         root.addView(engineRow, Ui.matchWrap(14, this));
 
+        TextView controllerLabel = Ui.text(this, "Floating Controller", 16, Color.WHITE);
+        controllerLabel.setTypeface(null, android.graphics.Typeface.BOLD);
+        root.addView(controllerLabel, Ui.matchWrap(10, this));
+
+        TextView controllerHint = Ui.text(this,
+                "Pilih foto dari galeri. Saat keluar aplikasi, tap bubble untuk mengatur LOCK/UNLOCK dan ON/OFF setiap overlay satu per satu.",
+                13, 0xFF9FA5B0);
+        root.addView(controllerHint, Ui.matchWrap(2, this));
+
+        Button controllerPhoto = Ui.button(this, "Pilih foto controller");
+        controllerPhoto.setOnClickListener(v -> pickControllerAvatar());
+        root.addView(controllerPhoto, Ui.matchWrap(6, this));
+
         engineSwitch.setOnCheckedChangeListener((buttonView, checked) -> {
             if (rendering) return;
             if (checked) {
@@ -112,7 +126,10 @@ public class MainActivity extends Activity {
                     requestOverlayPermission();
                     return;
                 }
-                repo.prefs().edit().putBoolean("engine_enabled", true).apply();
+                repo.prefs().edit()
+                        .putBoolean("engine_enabled", true)
+                        .putBoolean("overlay_visible", true)
+                        .apply();
                 requestNotificationPermissionIfNeeded();
                 startOverlayEngine();
             } else {
@@ -140,7 +157,7 @@ public class MainActivity extends Activity {
         root.addView(addDonation, Ui.matchWrap(6, this));
 
         TextView hint = Ui.text(this,
-                "UNLOCK: pakai ✥ MOVE untuk pindah dan tarik sisi/pojok untuk resize. Saat LOCK di luar app: Text bisa dibuka dengan tahan 2 jari 1,5 detik pada area teks. Image/GIF dan Overlay Link dibuka lewat tombol Unlock semua di notifikasi.",
+                "EDIT: ✥ MOVE ada di tengah overlay. Resize cukup dari handle ↘ kanan-bawah. 🔒 ada di dalam overlay. Saat keluar app, tap Floating Controller untuk LOCK/UNLOCK dan ON/OFF tiap overlay. Layer yang LOCK tetap click-through.",
                 13, 0xFF9FA5B0);
         hint.setPadding(0, Ui.dp(this, 14), 0, Ui.dp(this, 10));
         root.addView(hint);
@@ -156,7 +173,10 @@ public class MainActivity extends Activity {
     private void renderState() {
         rendering = true;
         boolean granted = Settings.canDrawOverlays(this);
-        permissionState.setText(granted ? "✓ Overlay permission aktif" : "! Overlay permission belum aktif");
+        boolean globallyVisible = repo.prefs().getBoolean("overlay_visible", true);
+        permissionState.setText(granted
+                ? (globallyVisible ? "✓ Overlay permission aktif · Overlay ON" : "✓ Overlay permission aktif · Overlay OFF")
+                : "! Overlay permission belum aktif");
         permissionState.setTextColor(granted ? 0xFF7CFFB2 : 0xFFFFC46B);
         engineSwitch.setChecked(repo.prefs().getBoolean("engine_enabled", false) && granted);
         rendering = false;
@@ -296,7 +316,7 @@ public class MainActivity extends Activity {
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle(existing == null ? "Overlay Link" : "Ganti Overlay Link")
-                .setMessage("Paste link overlay/widget dari Saweria, Trakteer, Streamlabs, atau provider lain.")
+                .setMessage("Paste URL Browser Source / Overlay Link dari provider (misalnya tombol Copy Link). Jangan paste URL halaman dashboard/pengaturan.")
                 .setView(input)
                 .setNegativeButton("Batal", null)
                 .setPositiveButton(existing == null ? "Tambah" : "Simpan", null)
@@ -332,6 +352,14 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void pickControllerAvatar() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("image/*");
+        externalFlowOpen = true;
+        startActivityForResult(i, REQ_CONTROLLER_AVATAR);
+    }
+
     private void pickImage(String idToReplace) {
         replaceImageId = idToReplace;
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -343,6 +371,22 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode == REQ_CONTROLLER_AVATAR
+                && resultCode == RESULT_OK
+                && data != null
+                && data.getData() != null) {
+            Uri uri = data.getData();
+            try {
+                getContentResolver().takePersistableUriPermission(
+                        uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (Exception ignored) {}
+            repo.prefs().edit().putString("controller_avatar_uri", uri.toString()).apply();
+            refreshOverlayEngine();
+            Toast.makeText(this, "Foto floating controller disimpan.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
         if ((requestCode == REQ_IMAGE || requestCode == REQ_REPLACE_IMAGE)
                 && resultCode == RESULT_OK
                 && data != null
@@ -439,7 +483,10 @@ public class MainActivity extends Activity {
     private void ensureEngineIfNeeded() {
         if (!Settings.canDrawOverlays(this)) return;
         if (!repo.prefs().getBoolean("engine_enabled", false)) {
-            repo.prefs().edit().putBoolean("engine_enabled", true).apply();
+            repo.prefs().edit()
+                    .putBoolean("engine_enabled", true)
+                    .putBoolean("overlay_visible", true)
+                    .apply();
             rendering = true;
             engineSwitch.setChecked(true);
             rendering = false;
