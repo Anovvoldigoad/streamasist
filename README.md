@@ -1,11 +1,10 @@
-# Stream Overlay Lite v2.1.9
+# StreamOverlayLite v2.2.0
 
-Perbaikan utama Overlay Link:
-- Ukuran frame dan skala isi browser source sekarang dipisah.
-- Resize kanan-bawah ikut memperbesar/memperkecil konten source, bukan hanya kotaknya.
-- Jika frame sudah mentok tepi layar, drag keluar tetap melanjutkan zoom konten sampai 4x.
-- Default content scale Overlay Link dinaikkan ke ~1.75x agar alert provider tidak terlihat terlalu kecil.
-- Background WebView tetap transparan.
-- Gunakan link Browser Source/Overlay Link dari provider, bukan URL halaman pengaturan.
+Resize fix untuk Overlay Link:
+- WebView sekarang memakai fixed browser canvas.
+- Handle kanan-bawah menskalakan seluruh canvas sebagai satu visual surface.
+- DOM/halaman tidak di-resize pada setiap gerakan, sehingga tidak reflow/pecah/dobel saat ditarik.
+- Project lama v2.1.9 otomatis dimigrasi: ukuran frame terakhir menjadi canvas dasar baru pada skala 1x.
+- Overlay Link tetap transparan, MOVE/LOCK tetap seperti v2.1.9, dan floating controller per-overlay tetap ada.
 
-Kontrol lain tetap: MOVE + LOCK di dalam kotak, resize di kanan-bawah luar kotak, bubble controller per-overlay, notification master ON/OFF.
+Catatan: gunakan URL Browser Source/Overlay Link dari provider, bukan URL halaman dashboard/pengaturan.
