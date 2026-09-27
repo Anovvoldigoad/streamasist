@@ -33,6 +33,8 @@ public class OverlayItem {
     public float imageAspectRatio = 0f;
 
     public String sourceUrl = "";
+    // Visual scale for browser-source content. Separate from the overlay frame size.
+    public float sourceScale = 1.75f;
 
     public static OverlayItem textDefault() {
         OverlayItem i = new OverlayItem();
@@ -65,6 +67,7 @@ public class OverlayItem {
         i.type = TYPE_DONATION;
         i.title = "Overlay Link";
         i.sourceUrl = url == null ? "" : url;
+        i.sourceScale = 1.75f;
         i.widthDp = 320;
         i.heightDp = 180;
         return i;
@@ -95,6 +98,7 @@ public class OverlayItem {
         o.put("imageUri", imageUri);
         o.put("imageAspectRatio", imageAspectRatio);
         o.put("sourceUrl", sourceUrl);
+        o.put("sourceScale", sourceScale);
         return o;
     }
 
@@ -125,6 +129,9 @@ public class OverlayItem {
         i.imageAspectRatio = (float) o.optDouble("imageAspectRatio", 1.0);
         if (i.imageAspectRatio <= 0f) i.imageAspectRatio = 0f;
         i.sourceUrl = o.optString("sourceUrl", "");
+        i.sourceScale = (float) o.optDouble("sourceScale", TYPE_DONATION.equals(i.type) ? 1.75 : 1.0);
+        if (i.sourceScale < 0.50f) i.sourceScale = 0.50f;
+        if (i.sourceScale > 4.00f) i.sourceScale = 4.00f;
         return i;
     }
 }

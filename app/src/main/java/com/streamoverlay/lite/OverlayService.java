@@ -385,12 +385,14 @@ public class OverlayService extends Service {
         web.setWebViewClient(new WebViewClient() {
             @Override public void onPageFinished(WebView view, String url) {
                 forceTransparentPage(view);
+                applyWebContentScale(view, item);
                 view.postDelayed(() -> {
                     forceTransparentPage(view);
+                    applyWebContentScale(view, item);
                     view.setVisibility(View.VISIBLE);
                 }, 120);
-                view.postDelayed(() -> forceTransparentPage(view), 700);
-                view.postDelayed(() -> forceTransparentPage(view), 1800);
+                view.postDelayed(() -> { forceTransparentPage(view); applyWebContentScale(view, item); }, 700);
+                view.postDelayed(() -> { forceTransparentPage(view); applyWebContentScale(view, item); }, 1800);
             }
         });
 
@@ -400,6 +402,7 @@ public class OverlayService extends Service {
             web.postDelayed(() -> {
                 if (web.getVisibility() != View.VISIBLE) {
                     forceTransparentPage(web);
+                    applyWebContentScale(web, item);
                     web.setVisibility(View.VISIBLE);
                 }
             }, 2500);
@@ -435,6 +438,26 @@ public class OverlayService extends Service {
         try {
             web.evaluateJavascript(js, null);
         } catch (Exception ignored) {}
+    }
+
+    private void applyWebContentScale(WebView web, OverlayItem item) {
+        if (web == null || item == null) return;
+        float scale = Math.max(0.50f, Math.min(4.00f, item.sourceScale));
+        String value = Float.toString(scale);
+        String js = "(function(){"
+                + "try{"
+                + "var s=" + value + ";"
+                + "var e=document.documentElement,b=document.body;"
+                + "if(e){e.style.setProperty('background','transparent','important');}"
+                + "if(b){"
+                + "b.style.setProperty('zoom',String(s),'important');"
+                + "b.style.setProperty('width',(100/s)+'%','important');"
+                + "b.style.setProperty('height',(100/s)+'%','important');"
+                + "b.style.setProperty('transform-origin','0 0','important');"
+                + "}"
+                + "}catch(e){}"
+                + "})();";
+        try { web.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
 
     private boolean isHttps(String value) {
@@ -1247,6 +1270,7 @@ public class OverlayService extends Service {
             int startContentH;
             float downX;
             float downY;
+            float startSourceScale;
 
             @Override public boolean onTouch(View v, MotionEvent event) {
                 WindowManager.LayoutParams lp = params.get(id);
@@ -1260,6 +1284,7 @@ public class OverlayService extends Service {
                         startContentH = contentHeightPx(lp, item);
                         downX = event.getRawX();
                         downY = event.getRawY();
+                        startSourceScale = item.sourceScale;
                         return true;
 
                     case MotionEvent.ACTION_MOVE:
@@ -1298,6 +1323,19 @@ public class OverlayService extends Service {
                         } else {
                             newW = clamp(startContentW + dx, minW, maxW);
                             newH = clamp(startContentH + dy, minH, maxH);
+                        }
+
+                        if (OverlayItem.TYPE_DONATION.equals(item.type)) {
+                            // The frame and the browser-source content are separate.
+                            // Once the frame reaches the screen edge, continued dragging still
+                            // enlarges/shrinks the actual widget instead of only changing empty space.
+                            float density = getResources().getDisplayMetrics().density;
+                            float sensitivityPx = Math.max(160f, 150f * density);
+                            float diagonal = (dx + dy) * 0.5f;
+                            item.sourceScale = Math.max(0.50f, Math.min(4.00f,
+                                    startSourceScale + diagonal / sensitivityPx));
+                            WebView web = webViews.get(id);
+                            if (web != null) applyWebContentScale(web, item);
                         }
 
                         setContentSize(lp, item, newW, newH);

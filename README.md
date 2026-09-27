@@ -1,10 +1,11 @@
-# Stream Overlay Lite v2.1.8
+# Stream Overlay Lite v2.1.9
 
-Revisi UX editor:
-- Hanya `MOVE` dan `LOCK` yang berada di dalam kotak konten.
-- Resize kanan-bawah, kontrol style teks, alignment, dan label editor berada di luar kotak konten.
-- Floating Controller diperkecil menjadi ~40dp dan avatar dibuat lebih transparan agar tidak mengganggu gameplay.
-- Kontrol per-overlay dari bubble tetap tersedia.
-- Notification tetap menjadi master Overlay ON/OFF.
+Perbaikan utama Overlay Link:
+- Ukuran frame dan skala isi browser source sekarang dipisah.
+- Resize kanan-bawah ikut memperbesar/memperkecil konten source, bukan hanya kotaknya.
+- Jika frame sudah mentok tepi layar, drag keluar tetap melanjutkan zoom konten sampai 4x.
+- Default content scale Overlay Link dinaikkan ke ~1.75x agar alert provider tidak terlihat terlalu kecil.
+- Background WebView tetap transparan.
+- Gunakan link Browser Source/Overlay Link dari provider, bukan URL halaman pengaturan.
 
-Build: GitHub Actions / Android SDK 36 / JDK 17.
+Kontrol lain tetap: MOVE + LOCK di dalam kotak, resize di kanan-bawah luar kotak, bubble controller per-overlay, notification master ON/OFF.
