@@ -61,8 +61,8 @@ public class OverlayService extends Service {
     private static final int EDITOR_SIDE_DP = 24;
     private static final int EDITOR_TOP_DP = 0;
     private static final int EDITOR_BOTTOM_DP = 30;
-    private static final int TEXT_EDITOR_BOTTOM_DP = 30;
-    private static final int CONTROLLER_SIZE_DP = 54;
+    private static final int TEXT_EDITOR_BOTTOM_DP = 76;
+    private static final int CONTROLLER_SIZE_DP = 40;
     private static final int CONTROLLER_MENU_WIDTH_DP = 170;
 
     private WindowManager wm;
@@ -530,8 +530,8 @@ public class OverlayService extends Service {
             FrameLayout.LayoutParams styleLp = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
                     Ui.dp(this, 34), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-            styleLp.bottomMargin = Ui.dp(this, 4);
-            contentHost.addView(styleTools, styleLp);
+            styleLp.bottomMargin = Ui.dp(this, 2);
+            root.addView(styleTools, styleLp);
             chrome.add(styleTools);
 
             LinearLayout alignTools = new LinearLayout(this);
@@ -556,8 +556,8 @@ public class OverlayService extends Service {
             FrameLayout.LayoutParams alignLp = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
                     Ui.dp(this, 34), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-            alignLp.bottomMargin = Ui.dp(this, 40);
-            contentHost.addView(alignTools, alignLp);
+            alignLp.bottomMargin = Ui.dp(this, 38);
+            root.addView(alignTools, alignLp);
             chrome.add(alignTools);
 
             smaller.setOnClickListener(v -> changeTextSize(item.id, -2f));
@@ -580,10 +580,10 @@ public class OverlayService extends Service {
             placeholder.setBackground(rounded(0x8817191F, 8));
             FrameLayout.LayoutParams p = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Ui.dp(this, 26), Gravity.TOP | Gravity.START);
-            p.leftMargin = Ui.dp(this, 6);
-            p.topMargin = Ui.dp(this, 6);
-            contentHost.addView(placeholder, p);
+                    Ui.dp(this, 26), Gravity.BOTTOM | Gravity.START);
+            p.leftMargin = editorSidePx();
+            p.bottomMargin = Ui.dp(this, 2);
+            root.addView(placeholder, p);
             chrome.add(placeholder);
         }
     }
@@ -838,10 +838,11 @@ public class OverlayService extends Service {
         GradientDrawable avatarBg = new GradientDrawable();
         avatarBg.setShape(GradientDrawable.OVAL);
         avatarBg.setColor(0xFF20232A);
-        avatarBg.setStroke(Ui.dp(this, 2), 0xFF7CFFB2);
+        avatarBg.setStroke(Ui.dp(this, 1), 0xAA7CFFB2);
         avatar.setBackground(avatarBg);
         avatar.setClipToOutline(true);
         avatar.setImageResource(R.drawable.ic_launcher);
+        avatar.setAlpha(0.56f);
         loadControllerAvatar(avatar);
 
         FrameLayout.LayoutParams avatarLp = new FrameLayout.LayoutParams(size, size);

@@ -157,7 +157,7 @@ public class MainActivity extends Activity {
         root.addView(addDonation, Ui.matchWrap(6, this));
 
         TextView hint = Ui.text(this,
-                "EDIT: ✥ MOVE ada di tengah overlay. Resize cukup dari handle ↘ kanan-bawah. 🔒 ada di dalam overlay. Saat keluar app, tap Floating Controller untuk LOCK/UNLOCK dan ON/OFF tiap overlay. Layer yang LOCK tetap click-through.",
+                "EDIT: ✥ MOVE dan 🔒 tetap di dalam overlay. Resize, style teks, alignment, dan tool lain ada di luar kotak konten. Saat keluar app, tap Floating Controller untuk LOCK/UNLOCK dan ON/OFF tiap overlay. Layer yang LOCK tetap click-through.",
                 13, 0xFF9FA5B0);
         hint.setPadding(0, Ui.dp(this, 14), 0, Ui.dp(this, 10));
         root.addView(hint);
