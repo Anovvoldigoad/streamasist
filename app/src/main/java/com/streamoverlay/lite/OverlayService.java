@@ -428,7 +428,7 @@ public class OverlayService extends Service {
         settings.setAllowContentAccess(false);
         settings.setSupportMultipleWindows(false);
         settings.setJavaScriptCanOpenWindowsAutomatically(false);
-        settings.setUseWideViewPort(true);
+        settings.setUseWideViewPort(false);
         settings.setLoadWithOverviewMode(false);
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
@@ -440,8 +440,7 @@ public class OverlayService extends Service {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         }
 
-        float density = Math.max(1f, getResources().getDisplayMetrics().density);
-        web.setInitialScale(Math.max(25, Math.min(100, Math.round(100f / density))));
+        web.setInitialScale(100);
 
         FrameLayout.LayoutParams webLp = new FrameLayout.LayoutParams(baseW, baseH);
         webLp.gravity = Gravity.TOP | Gravity.START;
@@ -450,15 +449,15 @@ public class OverlayService extends Service {
 
         web.setWebViewClient(new WebViewClient() {
             @Override public void onPageFinished(WebView view, String url) {
-                forceBrowserSourcePage(view, baseW);
+                forceTransparentPage(view);
                 applyBrowserSourceTransform(view, item, item.widthDp, item.heightDp);
                 view.postDelayed(() -> {
-                    forceBrowserSourcePage(view, baseW);
+                    forceTransparentPage(view);
                     applyBrowserSourceTransform(view, item, item.widthDp, item.heightDp);
                     view.setVisibility(View.VISIBLE);
                 }, 180);
-                view.postDelayed(() -> forceBrowserSourcePage(view, baseW), 850);
-                view.postDelayed(() -> forceBrowserSourcePage(view, baseW), 1800);
+                view.postDelayed(() -> forceTransparentPage(view), 850);
+                view.postDelayed(() -> forceTransparentPage(view), 1800);
             }
         });
 
@@ -467,7 +466,7 @@ public class OverlayService extends Service {
             web.loadUrl(url);
             web.postDelayed(() -> {
                 if (web.getVisibility() != View.VISIBLE) {
-                    forceBrowserSourcePage(web, baseW);
+                    forceTransparentPage(web);
                     applyBrowserSourceTransform(web, item, item.widthDp, item.heightDp);
                     web.setVisibility(View.VISIBLE);
                 }
@@ -485,21 +484,18 @@ public class OverlayService extends Service {
         return canvas;
     }
 
-    private void forceBrowserSourcePage(WebView web, int viewportWidth) {
+    private void forceTransparentPage(WebView web) {
         if (web == null) return;
-        int safeWidth = Math.max(240, Math.min(1600, viewportWidth));
+        // Keep provider networking and viewport untouched. Only remove the page
+        // background after it has loaded, exactly like the stable v2.2.1 path.
         String js = "(function(){"
                 + "try{"
-                + "var m=document.querySelector('meta[name=viewport]');"
-                + "if(!m){m=document.createElement('meta');m.name='viewport';(document.head||document.documentElement).appendChild(m);}"
-                + "m.setAttribute('content','width=" + safeWidth + ",user-scalable=no');"
                 + "document.documentElement.style.setProperty('background','transparent','important');"
                 + "document.documentElement.style.setProperty('background-color','transparent','important');"
                 + "if(document.body){document.body.style.setProperty('background','transparent','important');"
-                + "document.body.style.setProperty('background-color','transparent','important');"
-                + "document.body.style.setProperty('margin','0','important');}"
-                + "var s=document.getElementById('__sol_browser_source__');"
-                + "if(!s){s=document.createElement('style');s.id='__sol_browser_source__';"
+                + "document.body.style.setProperty('background-color','transparent','important');}"
+                + "var s=document.getElementById('__sol_transparent__');"
+                + "if(!s){s=document.createElement('style');s.id='__sol_transparent__';"
                 + "s.innerHTML='html,body{background:transparent!important;background-color:transparent!important;margin:0!important;overflow:hidden!important;}';"
                 + "(document.head||document.documentElement).appendChild(s);}"
                 + "}catch(e){}"
