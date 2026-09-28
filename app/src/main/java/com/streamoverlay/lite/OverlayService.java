@@ -63,9 +63,11 @@ public class OverlayService extends Service {
     private static final int EDITOR_BOTTOM_DP = 30;
     private static final int TEXT_EDITOR_BOTTOM_DP = 76;
     private static final int CONTROLLER_SIZE_DP = 34;
-    private static final int BROWSER_SOURCE_WIDTH_PX = 1280;
-    private static final int BROWSER_SOURCE_HEIGHT_PX = 720;
-    private static final String BROWSER_SOURCE_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+    // Overlay Link source profiles. Different provider widgets have very different
+    // natural shapes; forcing every source into 16:9 made alert widgets tiny and
+    // milestone/goal widgets almost unreadable.
+    private static final int SOURCE_GENERIC_W = 640;
+    private static final int SOURCE_GENERIC_H = 360;
     private static final int CONTROLLER_MENU_WIDTH_DP = 170;
 
     private WindowManager wm;
@@ -362,12 +364,46 @@ public class OverlayService extends Service {
         return image;
     }
 
+    private int[] overlaySourceCanvas(OverlayItem item) {
+        String u = item == null || item.sourceUrl == null ? "" : item.sourceUrl.toLowerCase();
+        // SociaBuzz Alert: visual is compact/centered, so a near-square browser
+        // surface avoids wasting most of the frame on transparent 16:9 space.
+        if (u.contains("/alert1/")) return new int[]{560, 520};
+        // SociaBuzz Total / Milestone & Goal: intentionally wide and short.
+        if (u.contains("/total1/") || u.contains("milestone") || u.contains("goal"))
+            return new int[]{960, 240};
+        // Common ticker/leaderboard style widgets are also wide/short.
+        if (u.contains("running") || u.contains("latest") || u.contains("leaderboard") || u.contains("top"))
+            return new int[]{960, 260};
+        // Timers usually need more vertical room but are not a full 16:9 scene.
+        if (u.contains("subathon") || u.contains("timer")) return new int[]{720, 320};
+        // Wheel/spinner style sources benefit from a square surface.
+        if (u.contains("wheel") || u.contains("spin")) return new int[]{640, 640};
+        return new int[]{SOURCE_GENERIC_W, SOURCE_GENERIC_H};
+    }
+
+    private void normalizeOverlayLinkFrameOnce(OverlayItem item, int baseW, int baseH) {
+        if (item == null || item.sourceProfileVersion >= 1) return;
+        float ratio = baseW / (float) Math.max(1, baseH);
+        // v2.2.2 forced every link to 16:9. Preserve width/position but correct
+        // the height once for the actual widget profile.
+        if (item.widthDp > 0) {
+            item.heightDp = Math.max(72, Math.round(item.widthDp / ratio));
+        }
+        item.sourceProfileVersion = 1;
+        repo.upsert(item);
+    }
+
     private View createOverlayLinkSource(OverlayItem item) {
-        // Browser Source v2.2.2:
-        // Keep a real desktop-like 16:9 browser surface in PIXELS, then transform
-        // that surface into the user's overlay frame. The WebView viewport itself
-        // never changes while the resize handle is dragged, so provider DOM/CSS
-        // does not reflow and mobile responsive breakpoints are avoided.
+        // Browser Source v2.2.3:
+        // 1) keep Android WebView's native UA (no desktop spoof -> fewer bot checks),
+        // 2) choose a fixed canvas that matches the widget type, and
+        // 3) transform that fixed surface when the resize handle is dragged.
+        int[] canvasSize = overlaySourceCanvas(item);
+        final int baseW = canvasSize[0];
+        final int baseH = canvasSize[1];
+        normalizeOverlayLinkFrameOnce(item, baseW, baseH);
+
         FrameLayout canvas = new FrameLayout(this);
         canvas.setBackgroundColor(Color.TRANSPARENT);
         canvas.setClipChildren(true);
@@ -398,36 +434,31 @@ public class OverlayService extends Service {
         settings.setDisplayZoomControls(false);
         settings.setSupportZoom(false);
         settings.setTextZoom(100);
-        settings.setUserAgentString(BROWSER_SOURCE_UA);
+        // IMPORTANT: do not spoof a desktop UA. Some overlay providers put
+        // WebViews with a mismatched UA through human-verification challenges.
         if (Build.VERSION.SDK_INT >= 21) {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         }
 
-        // Android WebView normally maps CSS px to dp. Using an inverse-density
-        // initial scale together with a fixed 1280px surface makes the source much
-        // closer to a desktop browser-source canvas without allocating a 1280dp
-        // (often 3K-4K physical pixel) WebView on high-density phones.
         float density = Math.max(1f, getResources().getDisplayMetrics().density);
         web.setInitialScale(Math.max(25, Math.min(100, Math.round(100f / density))));
 
-        FrameLayout.LayoutParams webLp = new FrameLayout.LayoutParams(
-                BROWSER_SOURCE_WIDTH_PX,
-                BROWSER_SOURCE_HEIGHT_PX);
+        FrameLayout.LayoutParams webLp = new FrameLayout.LayoutParams(baseW, baseH);
         webLp.gravity = Gravity.TOP | Gravity.START;
         canvas.addView(web, webLp);
-        applyBrowserSourceTransform(web, item.widthDp, item.heightDp);
+        applyBrowserSourceTransform(web, item, item.widthDp, item.heightDp);
 
         web.setWebViewClient(new WebViewClient() {
             @Override public void onPageFinished(WebView view, String url) {
-                forceBrowserSourcePage(view);
-                applyBrowserSourceTransform(view, item.widthDp, item.heightDp);
+                forceBrowserSourcePage(view, baseW);
+                applyBrowserSourceTransform(view, item, item.widthDp, item.heightDp);
                 view.postDelayed(() -> {
-                    forceBrowserSourcePage(view);
-                    applyBrowserSourceTransform(view, item.widthDp, item.heightDp);
+                    forceBrowserSourcePage(view, baseW);
+                    applyBrowserSourceTransform(view, item, item.widthDp, item.heightDp);
                     view.setVisibility(View.VISIBLE);
                 }, 180);
-                view.postDelayed(() -> forceBrowserSourcePage(view), 850);
-                view.postDelayed(() -> forceBrowserSourcePage(view), 1800);
+                view.postDelayed(() -> forceBrowserSourcePage(view, baseW), 850);
+                view.postDelayed(() -> forceBrowserSourcePage(view, baseW), 1800);
             }
         });
 
@@ -436,8 +467,8 @@ public class OverlayService extends Service {
             web.loadUrl(url);
             web.postDelayed(() -> {
                 if (web.getVisibility() != View.VISIBLE) {
-                    forceBrowserSourcePage(web);
-                    applyBrowserSourceTransform(web, item.widthDp, item.heightDp);
+                    forceBrowserSourcePage(web, baseW);
+                    applyBrowserSourceTransform(web, item, item.widthDp, item.heightDp);
                     web.setVisibility(View.VISIBLE);
                 }
             }, 2800);
@@ -454,13 +485,14 @@ public class OverlayService extends Service {
         return canvas;
     }
 
-    private void forceBrowserSourcePage(WebView web) {
+    private void forceBrowserSourcePage(WebView web, int viewportWidth) {
         if (web == null) return;
+        int safeWidth = Math.max(240, Math.min(1600, viewportWidth));
         String js = "(function(){"
                 + "try{"
                 + "var m=document.querySelector('meta[name=viewport]');"
                 + "if(!m){m=document.createElement('meta');m.name='viewport';(document.head||document.documentElement).appendChild(m);}"
-                + "m.setAttribute('content','width=1280,user-scalable=no');"
+                + "m.setAttribute('content','width=" + safeWidth + ",user-scalable=no');"
                 + "document.documentElement.style.setProperty('background','transparent','important');"
                 + "document.documentElement.style.setProperty('background-color','transparent','important');"
                 + "if(document.body){document.body.style.setProperty('background','transparent','important');"
@@ -475,26 +507,19 @@ public class OverlayService extends Service {
         try { web.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
 
-    private void applyBrowserSourceTransform(WebView web, int frameWidthDp, int frameHeightDp) {
+    private void applyBrowserSourceTransform(WebView web, OverlayItem item, int frameWidthDp, int frameHeightDp) {
         if (web == null) return;
         int frameW = Math.max(1, Ui.dp(this, frameWidthDp));
         int frameH = Math.max(1, Ui.dp(this, frameHeightDp));
-        float sx = frameW / (float) BROWSER_SOURCE_WIDTH_PX;
-        float sy = frameH / (float) BROWSER_SOURCE_HEIGHT_PX;
-        // Overlay Link uses one proportional corner handle, so normally sx == sy.
-        // min() also keeps old non-16:9 saved frames from stretching the webpage.
-        float scale = Math.max(0.08f, Math.min(6.0f, Math.min(sx, sy)));
-        web.setPivotX(0f);
-        web.setPivotY(0f);
-        web.setScaleX(scale);
-        web.setScaleY(scale);
+        applyBrowserSourceTransformPx(web, item, frameW, frameH);
     }
 
-    private void applyBrowserSourceTransformPx(WebView web, int frameW, int frameH) {
+    private void applyBrowserSourceTransformPx(WebView web, OverlayItem item, int frameW, int frameH) {
         if (web == null) return;
-        float sx = Math.max(1, frameW) / (float) BROWSER_SOURCE_WIDTH_PX;
-        float sy = Math.max(1, frameH) / (float) BROWSER_SOURCE_HEIGHT_PX;
-        float scale = Math.max(0.08f, Math.min(6.0f, Math.min(sx, sy)));
+        int[] size = overlaySourceCanvas(item);
+        float sx = Math.max(1, frameW) / (float) size[0];
+        float sy = Math.max(1, frameH) / (float) size[1];
+        float scale = Math.max(0.08f, Math.min(8.0f, Math.min(sx, sy)));
         web.setPivotX(0f);
         web.setPivotY(0f);
         web.setScaleX(scale);
@@ -1408,7 +1433,8 @@ public class OverlayService extends Service {
                         if (OverlayItem.TYPE_DONATION.equals(item.type)) {
                             // Treat Overlay Link like a scene/source transform: keep the
                             // browser viewport fixed and resize the complete 16:9 surface.
-                            final float ratio = BROWSER_SOURCE_WIDTH_PX / (float) BROWSER_SOURCE_HEIGHT_PX;
+                            int[] sourceSize = overlaySourceCanvas(item);
+                            final float ratio = sourceSize[0] / (float) sourceSize[1];
                             int maxSourceW = Math.max(minW, dm.widthPixels * 4);
                             int maxSourceH = Math.max(minH, dm.heightPixels * 4);
                             if (Math.abs(dx) >= Math.abs(dy)) {
@@ -1430,7 +1456,7 @@ public class OverlayService extends Service {
                             newH = Math.max(minH, newH);
 
                             WebView web = webViews.get(id);
-                            if (web != null) applyBrowserSourceTransformPx(web, newW, newH);
+                            if (web != null) applyBrowserSourceTransformPx(web, item, newW, newH);
                         }
 
                         setContentSize(lp, item, newW, newH);

@@ -38,6 +38,8 @@ public class OverlayItem {
     public int sourceBaseWidthDp = 320;
     public int sourceBaseHeightDp = 180;
     public float sourceScale = 1.0f;
+    // v2.2.3+: remembers that the frame has been normalized for the URL source profile.
+    public int sourceProfileVersion = 0;
 
     public static OverlayItem textDefault() {
         OverlayItem i = new OverlayItem();
@@ -106,6 +108,7 @@ public class OverlayItem {
         o.put("sourceBaseWidthDp", sourceBaseWidthDp);
         o.put("sourceBaseHeightDp", sourceBaseHeightDp);
         o.put("sourceScale", sourceScale);
+        o.put("sourceProfileVersion", sourceProfileVersion);
         return o;
     }
 
@@ -136,6 +139,7 @@ public class OverlayItem {
         i.imageAspectRatio = (float) o.optDouble("imageAspectRatio", 1.0);
         if (i.imageAspectRatio <= 0f) i.imageAspectRatio = 0f;
         i.sourceUrl = o.optString("sourceUrl", "");
+        i.sourceProfileVersion = o.optInt("sourceProfileVersion", 0);
         if (TYPE_DONATION.equals(i.type)) {
             if (o.has("sourceBaseWidthDp") && o.has("sourceBaseHeightDp")) {
                 i.sourceBaseWidthDp = Math.max(80, o.optInt("sourceBaseWidthDp", 320));

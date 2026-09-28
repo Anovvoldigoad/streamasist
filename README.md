@@ -1,4 +1,4 @@
-# StreamOverlayLite v2.2.2
+# StreamOverlayLite v2.2.3
 
 Deep fix untuk Overlay Link dan floating controller.
 
@@ -17,3 +17,11 @@ Deep fix untuk Overlay Link dan floating controller.
 
 ## Catatan
 Gunakan URL Overlay/Browser Source dari provider, bukan URL halaman dashboard/pengaturan.
+
+
+## v2.2.3 Overlay Link fix
+- Restored the native Android WebView user-agent to avoid provider human-verification caused by desktop-UA spoofing.
+- Overlay Link now uses source-aware fixed canvases instead of forcing every widget to 16:9.
+- SociaBuzz `alert1` uses a compact near-square canvas; `total1` / Milestone & Goal uses a wide-short canvas.
+- Existing v2.2.2 Overlay Link frames are normalized once automatically; no need to delete/re-add them.
+- Resize still transforms a fixed browser surface, so dragging the corner does not continuously reflow the provider DOM.
